@@ -65,3 +65,66 @@ def get_by_month(conn, year: int, month: int):
     """, (start_date, end_date))
 
     return cursor.fetchall()
+
+
+# Функции для работы с пользователями
+def insert_or_update_user(conn, chat_id, username=None, first_name=None, last_name=None):
+    """Добавляет или обновляет пользователя в БД"""
+    try:
+        # Проверяем, существует ли уже пользователь
+        cursor = conn.execute("SELECT id FROM users WHERE chat_id=?", (str(chat_id),))
+        existing = cursor.fetchone()
+
+        if existing:
+            # Обновляем существующего пользователя
+            conn.execute("""
+                         UPDATE users 
+                         SET username=?, first_name=?, last_name=?, updated_at=CURRENT_TIMESTAMP
+                         WHERE chat_id=?
+                         """, (username, first_name, last_name, str(chat_id)))
+        else:
+            # Вставляем нового пользователя
+            conn.execute("""
+                         INSERT INTO users (chat_id, username, first_name, last_name)
+                         VALUES (?, ?, ?, ?)
+                         """, (str(chat_id), username, first_name, last_name))
+        
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"❌ Ошибка при сохранении пользователя {chat_id}: {e}")
+        return False
+
+
+def get_all_users(conn):
+    """Получает всех пользователей из БД"""
+    cursor = conn.execute("SELECT * FROM users WHERE subscribed=1 ORDER BY created_at")
+    return cursor.fetchall()
+
+
+def get_user_by_chat_id(conn, chat_id):
+    """Получает пользователя по chat_id"""
+    cursor = conn.execute("SELECT * FROM users WHERE chat_id=?", (str(chat_id),))
+    return cursor.fetchone()
+
+
+def update_user_subscription(conn, chat_id, subscribed):
+    """Обновляет статус подписки пользователя"""
+    try:
+        conn.execute("UPDATE users SET subscribed=? WHERE chat_id=?", (subscribed, str(chat_id)))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"❌ Ошибка при обновлении подписки пользователя {chat_id}: {e}")
+        return False
+
+
+def delete_user(conn, chat_id):
+    """Удаляет пользователя из БД"""
+    try:
+        conn.execute("DELETE FROM users WHERE chat_id=?", (str(chat_id),))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"❌ Ошибка при удалении пользователя {chat_id}: {e}")
+        return False

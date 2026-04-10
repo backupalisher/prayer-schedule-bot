@@ -20,3 +20,18 @@ def create_table(conn):
     except Exception:
         # Столбец уже существует, игнорируем ошибку
         pass
+    
+    # Создаем таблицу пользователей для хранения chat_id
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        chat_id TEXT UNIQUE,
+        username TEXT,
+        first_name TEXT,
+        last_name TEXT,
+        subscribed INTEGER DEFAULT 1,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+    conn.commit()

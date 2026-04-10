@@ -10,6 +10,8 @@ from config import BOT_TOKEN, CHAT_ID
 from services.prayer_service import get_today_prayers
 from services.pdf_generator import generate_pdf
 from services.prayer_service import get_next_prayer
+from db.database import get_connection
+from db.crud import insert_or_update_user
 
 from aiogram.types import FSInputFile
 
@@ -41,9 +43,32 @@ def get_bot():
     return _bot_instance
 
 
+async def save_user_info(message: Message):
+    """Сохраняет информацию о пользователе в БД"""
+    try:
+        conn = get_connection()
+        chat_id = message.chat.id
+        username = message.from_user.username
+        first_name = message.from_user.first_name
+        last_name = message.from_user.last_name
+        
+        success = insert_or_update_user(conn, chat_id, username, first_name, last_name)
+        conn.close()
+        
+        if success:
+            print(f"✅ Пользователь {chat_id} сохранен в БД")
+        else:
+            print(f"⚠️ Не удалось сохранить пользователя {chat_id}")
+    except Exception as e:
+        print(f"❌ Ошибка при сохранении пользователя: {e}")
+
+
 @dp.message(Command("start"))
 async def start_handler(message: Message):
     """Обработчик команды /start"""
+    # Сохраняем пользователя в БД
+    await save_user_info(message)
+    
     await message.answer(
         "🕌 <b>Ассаламу алейкум!</b>\n\n"
         "Я бот расписания намазов.\n\n"
@@ -51,7 +76,8 @@ async def start_handler(message: Message):
         "/today - расписание на сегодня\n"
         "/next - следующий намаз\n"
         "/pdf - скачать PDF расписание\n"
-        "/help - помощь",
+        "/help - помощь\n\n"
+        "<i>Ваш chat_id автоматически сохранен для получения уведомлений</i>",
         parse_mode="HTML"
     )
 
@@ -59,6 +85,9 @@ async def start_handler(message: Message):
 @dp.message(Command("help"))
 async def help_handler(message: Message):
     """Обработчик команды /help"""
+    # Сохраняем пользователя в БД
+    await save_user_info(message)
+    
     await message.answer(
         "🕌 <b>Помощь по командам:</b>\n\n"
         "/today - показывает время намазов на сегодня\n"
@@ -72,12 +101,18 @@ async def help_handler(message: Message):
 @dp.message(Command("today"))
 async def today_handler(message: Message):
     """Обработчик команды /today"""
+    # Сохраняем пользователя в БД
+    await save_user_info(message)
+    
     text = get_today_prayers()
     await message.answer(text, parse_mode="HTML")
 
 
 @dp.message(Command("pdf"))
 async def pdf_handler(message: Message):
+    # Сохраняем пользователя в БД
+    await save_user_info(message)
+    
     await message.answer("📄 Генерирую PDF файл с расписанием...")
 
     pdf_file = await asyncio.to_thread(generate_pdf)
@@ -105,6 +140,9 @@ async def pdf_handler(message: Message):
 
 @dp.message(Command("next"))
 async def next_handler(message: Message):
+    # Сохраняем пользователя в БД
+    await save_user_info(message)
+    
     text = get_next_prayer()
     await message.answer(text, parse_mode="HTML")
 
