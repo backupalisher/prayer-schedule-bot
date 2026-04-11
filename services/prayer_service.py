@@ -74,9 +74,10 @@ def get_next_prayer():
     if not today_row:
         return "❌ Нет данных на сегодня"
 
-    # Проверяем намазы на сегодня
+    # Проверяем намазы на сегодня (все 6 намазов)
     prayers_today = [
         ("Фаджр", today_row[COLUMN_INDEXES['fajr']]),
+        ("Шурук", today_row[COLUMN_INDEXES['shurooq']]),
         ("Зухр", today_row[COLUMN_INDEXES['dhuhr']]),
         ("Аср", today_row[COLUMN_INDEXES['asr']]),
         ("Магриб", today_row[COLUMN_INDEXES['maghrib']]),
