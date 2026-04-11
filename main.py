@@ -6,7 +6,7 @@ from bot.bot import start_bot
 from db.database import init_db
 from services.prayer_service import get_today_prayers
 from parser.parser import parse_and_save
-from config import USE_TELEGRAM
+from config import USE_TELEGRAM, MONITOR_ALERTS_ENABLED
 from services.monitor import start_monitoring, stop_monitoring, get_monitor_status
 
 
@@ -37,13 +37,16 @@ async def main():
     # Запускаем планировщик
     start_scheduler()
 
-    # Запускаем мониторинг состояния бота
-    print("📊 Запуск системы мониторинга состояния бота...")
-    monitor = await start_monitoring(
-        check_interval=300,  # Проверка каждые 5 минут
-        max_failures=3      # 3 последовательных сбоя перед перезапуском
-    )
-    print("✅ Система мониторинга запущена")
+    # Запускаем мониторинг состояния бота (только если включены алерты)
+    if MONITOR_ALERTS_ENABLED:
+        print("📊 Запуск системы мониторинга состояния бота...")
+        monitor = await start_monitoring(
+            check_interval=300,  # Проверка каждые 5 минут
+            max_failures=3      # 3 последовательных сбоя перед перезапуском
+        )
+        print("✅ Система мониторинга запущена")
+    else:
+        print("📊 Мониторинг состояния бота отключен (MONITOR_ALERTS_ENABLED=False)")
 
     # Запускаем бота (только если USE_TELEGRAM=True)
     if USE_TELEGRAM:

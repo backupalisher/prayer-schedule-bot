@@ -38,12 +38,15 @@ def schedule_notifications():
                 return
 
         # Используем правильные индексы (совместимо с prayer_service.py)
+        # После добавления shurooq индексы изменились:
+        # row[0]=id, row[1]=date, row[2]=fajr, row[3]=shurooq, 
+        # row[4]=dhuhr, row[5]=asr, row[6]=maghrib, row[7]=isha
         prayers = {
             "Фаджр": row[2],  # fajr
-            "Зухр": row[3],   # dhuhr
-            "Аср": row[4],    # asr
-            "Магриб": row[5], # maghrib
-            "Иша": row[6],    # isha
+            "Зухр": row[4],   # dhuhr (было row[3], теперь row[4])
+            "Аср": row[5],    # asr (было row[4], теперь row[5])
+            "Магриб": row[6], # maghrib (было row[5], теперь row[6])
+            "Иша": row[7],    # isha (было row[6], теперь row[7])
         }
 
         scheduled_count = 0

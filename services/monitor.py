@@ -94,9 +94,9 @@ class BotMonitor:
         api_check = await self.check_telegram_api()
         checks.append(('Telegram API', api_check))
         
-        # Проверка 2: Возможность отправки тестового сообщения (только если API доступен)
+        # Проверка 2: Возможность отправки тестового сообщения (только если API доступен и включены алерты)
         message_check = True
-        if api_check and USE_TELEGRAM:
+        if api_check and USE_TELEGRAM and MONITOR_ALERTS_ENABLED:
             try:
                 # Отправляем тестовое сообщение самому себе
                 test_message = "🤖 Проверка здоровья бота (мониторинг)"
@@ -110,6 +110,10 @@ class BotMonitor:
                 logger.error(f"Ошибка при проверке отправки сообщений: {e}")
                 checks.append(('Отправка сообщений', False))
                 message_check = False
+        elif api_check and USE_TELEGRAM and not MONITOR_ALERTS_ENABLED:
+            # Если алерты отключены, просто считаем проверку успешной
+            checks.append(('Отправка сообщений', True))
+            logger.info("  ⚠️ Отправка тестовых сообщений отключена (MONITOR_ALERTS_ENABLED=False)")
         
         # Определяем общий статус
         all_checks_passed = all(check[1] for check in checks)
