@@ -1,15 +1,22 @@
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from datetime import datetime
 import pytz
-from parser.parser import parse_and_save
-from services.notifier import notify
+import logging
+from parser.parser import parse_and_save, ensure_current_month_data, parse_next_month
+from services.notifier import notify, prayer_time_worker
 from db.database import get_connection
-from db.crud import get_by_date
+from db.crud import get_by_date, is_data_actual
 import asyncio
+
+# Настройка логирования
+logger = logging.getLogger(__name__)
 
 # Устанавливаем временную зону (Москва UTC+3)
 MOSCOW_TZ = pytz.timezone('Europe/Moscow')
 scheduler = AsyncIOScheduler(timezone=MOSCOW_TZ)
+
+# Ссылка на фоновую задачу проверки времени намазов
+_prayer_worker_task = None
 
 
 def schedule_notifications():
@@ -18,23 +25,22 @@ def schedule_notifications():
     try:
         conn = get_connection()
         today = datetime.now(MOSCOW_TZ).strftime("%Y-%m-%d")
-        print(f"📅 Начинаю планирование уведомлений на {today}")
+        logger.info("📅 Начинаю планирование уведомлений на %s", today)
         
         row = get_by_date(conn, today)
 
         if not row:
-            print(f"⚠️ Нет данных для {today}, уведомления не запланированы")
+            logger.warning("⚠️ Нет данных для %s, уведомления не запланированы", today)
             # Попробуем загрузить данные, если их нет
-            print("🔄 Попытка загрузить данные через парсер...")
-            from parser.parser import parse_and_save
-            if parse_and_save():
-                print("✅ Данные успешно загружены, повторная попытка планирования...")
+            logger.info("🔄 Попытка загрузить данные через парсер...")
+            if ensure_current_month_data():
+                logger.info("✅ Данные успешно загружены, повторная попытка планирования...")
                 row = get_by_date(conn, today)
                 if not row:
-                    print(f"❌ Данные для {today} все еще отсутствуют")
+                    logger.error("❌ Данные для %s все еще отсутствуют", today)
                     return
             else:
-                print(f"❌ Не удалось загрузить данные для {today}")
+                logger.error("❌ Не удалось загрузить данные для %s", today)
                 return
 
         # Используем правильные индексы (совместимо с prayer_service.py)
@@ -59,15 +65,15 @@ def schedule_notifications():
             if job_id and isinstance(job_id, str) and job_id.startswith(f"prayer_") and today in job_id:
                 try:
                     scheduler.remove_job(job_id)
-                    print(f"🗑️ Удалена старая задача: {job_id}")
+                    logger.info("🗑️ Удалена старая задача: %s", job_id)
                 except Exception as e:
-                    print(f"⚠️ Не удалось удалить старую задачу {job_id}: {e}")
+                    logger.warning("⚠️ Не удалось удалить старую задачу %s: %s", job_id, e)
 
         for name, time_str in prayers.items():
             try:
                 # Проверяем формат времени
                 if not time_str or ':' not in time_str:
-                    print(f"⚠️ Неверный формат времени для {name}: '{time_str}'")
+                    logger.warning("⚠️ Неверный формат времени для %s: '%s'", name, time_str)
                     failed_count += 1
                     continue
 
@@ -78,11 +84,11 @@ def schedule_notifications():
                     minute = int(minute_str)
                     
                     if hour < 0 or hour > 23 or minute < 0 or minute > 59:
-                        print(f"⚠️ Некорректное время для {name}: {time_str}")
+                        logger.warning("⚠️ Некорректное время для %s: %s", name, time_str)
                         failed_count += 1
                         continue
                 except (ValueError, TypeError) as e:
-                    print(f"⚠️ Не удалось распарсить время для {name}: '{time_str}' - {e}")
+                    logger.warning("⚠️ Не удалось распарсить время для %s: '%s' - %s", name, time_str, e)
                     failed_count += 1
                     continue
 
@@ -91,7 +97,7 @@ def schedule_notifications():
                 prayer_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
                 
                 if prayer_time < now:
-                    print(f"⏰ Время намаза '{name}' ({time_str}) уже прошло, пропускаем")
+                    logger.info("⏰ Время намаза '%s' (%s) уже прошло, пропускаем", name, time_str)
                     continue
 
                 # Планируем уведомление с учетом временной зоны
@@ -108,51 +114,82 @@ def schedule_notifications():
                     misfire_grace_time=300  # 5 минут на выполнение пропущенной задачи
                 )
                 scheduled_count += 1
-                print(f"📅 Запланировано уведомление для '{name}' в {time_str} (МСК), ID: {job_id}")
+                logger.info("📅 Запланировано уведомление для '%s' в %s (МСК), ID: %s", name, time_str, job_id)
                 
             except Exception as e:
-                print(f"❌ Критическая ошибка планирования для '{name}': {type(e).__name__}: {e}")
+                logger.error("❌ Критическая ошибка планирования для '%s': %s: %s", name, type(e).__name__, e)
                 failed_count += 1
 
         if scheduled_count > 0:
-            print(f"✅ Успешно запланировано {scheduled_count} уведомлений на {today}")
+            logger.info("✅ Успешно запланировано %s уведомлений на %s", scheduled_count, today)
         else:
-            print(f"⚠️ Не запланировано ни одного уведомления на {today}")
+            logger.warning("⚠️ Не запланировано ни одного уведомления на %s", today)
             
         if failed_count > 0:
-            print(f"⚠️ Не удалось запланировать {failed_count} уведомлений")
+            logger.warning("⚠️ Не удалось запланировать %s уведомлений", failed_count)
             
         # Логируем все запланированные задачи
         jobs = scheduler.get_jobs()
         if jobs:
-            print(f"📋 Всего активных задач в планировщике: {len(jobs)}")
+            logger.info("📋 Всего активных задач в планировщике: %s", len(jobs))
             for job in jobs[:5]:  # Показываем первые 5 задач
                 job_id = getattr(job, 'id', 'unknown')
                 next_run = getattr(job, 'next_run_time', None)
-                print(f"   - {job_id}: {next_run}")
+                logger.info("   - %s: %s", job_id, next_run)
         else:
-            print("📋 В планировщике нет активных задач")
+            logger.info("📋 В планировщике нет активных задач")
 
     except Exception as e:
-        print(f"❌ Критическая ошибка в schedule_notifications: {type(e).__name__}: {e}")
+        logger.error("❌ Критическая ошибка в schedule_notifications: %s: %s", type(e).__name__, e)
         import traceback
         traceback.print_exc()
     finally:
         if conn:
             try:
                 conn.close()
-            except:
+            except Exception:
                 pass
+
+
+async def start_prayer_worker():
+    """Запускает фоновую задачу проверки времени намазов по БД"""
+    global _prayer_worker_task
+    
+    # Останавливаем предыдущую задачу, если есть
+    if _prayer_worker_task and not _prayer_worker_task.done():
+        _prayer_worker_task.cancel()
+        try:
+            await _prayer_worker_task
+        except asyncio.CancelledError:
+            pass
+    
+    # Запускаем новую фоновую задачу
+    _prayer_worker_task = asyncio.create_task(prayer_time_worker())
+    logger.info("✅ Фоновый worker проверки времени намазов запущен")
+
+
+async def stop_prayer_worker():
+    """Останавливает фоновую задачу проверки времени намазов"""
+    global _prayer_worker_task
+    
+    if _prayer_worker_task and not _prayer_worker_task.done():
+        _prayer_worker_task.cancel()
+        try:
+            await _prayer_worker_task
+        except asyncio.CancelledError:
+            pass
+        _prayer_worker_task = None
+        logger.info("🛑 Фоновый worker проверки времени намазов остановлен")
 
 
 def start_scheduler():
     """Запускает планировщик задач с улучшенной обработкой ошибок"""
     try:
-        print("🚀 Запуск планировщика задач...")
+        logger.info("🚀 Запуск планировщика задач...")
         
         # Проверяем, не запущен ли уже планировщик
         if scheduler.running:
-            print("⚠️ Планировщик уже запущен, пропускаем повторный запуск")
+            logger.warning("⚠️ Планировщик уже запущен, пропускаем повторный запуск")
             return
         
         # Парсинг расписания 1-го числа каждого месяца в 00:30
@@ -166,7 +203,20 @@ def start_scheduler():
             replace_existing=True,
             misfire_grace_time=3600  # 1 час на выполнение пропущенной задачи
         )
-        print("📅 Задача парсинга расписания запланирована (1-е число месяца, 00:30)")
+        logger.info("📅 Задача парсинга расписания запланирована (1-е число месяца, 00:30)")
+
+        # Парсинг следующего месяца 1-го числа в 01:00 (после парсинга текущего)
+        scheduler.add_job(
+            parse_next_month,
+            "cron",
+            day=1,
+            hour=1,
+            minute=0,
+            id="parse_next_month",
+            replace_existing=True,
+            misfire_grace_time=3600
+        )
+        logger.info("📅 Задача парсинга следующего месяца запланирована (1-е число, 01:00)")
 
         # Планирование уведомлений каждый день в 00:05
         scheduler.add_job(
@@ -178,7 +228,7 @@ def start_scheduler():
             replace_existing=True,
             misfire_grace_time=3600  # 1 час на выполнение пропущенной задачи
         )
-        print("📅 Ежедневная задача планирования уведомлений запланирована (00:05)")
+        logger.info("📅 Ежедневная задача планирования уведомлений запланирована (00:05)")
 
         # Дополнительная проверка в 23:55 на случай сбоя
         scheduler.add_job(
@@ -190,10 +240,10 @@ def start_scheduler():
             replace_existing=True,
             misfire_grace_time=3600  # 1 час на выполнение пропущенной задачи
         )
-        print("📅 Вечерняя проверка планирования запланирована (23:55)")
+        logger.info("📅 Вечерняя проверка планирования запланирована (23:55)")
 
         # Немедленное планирование уведомлений при запуске
-        print("🔄 Немедленное планирование уведомлений...")
+        logger.info("🔄 Немедленное планирование уведомлений...")
         scheduler.add_job(
             schedule_notifications,
             "date",
@@ -204,12 +254,12 @@ def start_scheduler():
 
         # Запускаем планировщик
         scheduler.start()
-        print("✅ Планировщик задач успешно запущен")
+        logger.info("✅ Планировщик задач успешно запущен")
         
         # Логируем состояние планировщика
-        print(f"📊 Состояние планировщика: {'работает' if scheduler.running else 'остановлен'}")
+        logger.info("📊 Состояние планировщика: %s", 'работает' if scheduler.running else 'остановлен')
         jobs = scheduler.get_jobs()
-        print(f"📊 Всего запланированных задач: {len(jobs)}")
+        logger.info("📊 Всего запланированных задач: %s", len(jobs))
         
         # Выводим информацию о следующих запусках
         for job in jobs[:3]:  # Показываем первые 3 задачи
@@ -217,10 +267,10 @@ def start_scheduler():
             next_run = getattr(job, 'next_run_time', None)
             if next_run:
                 next_run_local = next_run.astimezone(MOSCOW_TZ)
-                print(f"   - {job_id}: следующий запуск {next_run_local.strftime('%Y-%m-%d %H:%M:%S')} МСК")
+                logger.info("   - %s: следующий запуск %s МСК", job_id, next_run_local.strftime('%Y-%m-%d %H:%M:%S'))
 
     except Exception as e:
-        print(f"❌ Критическая ошибка запуска планировщика: {type(e).__name__}: {e}")
+        logger.error("❌ Критическая ошибка запуска планировщика: %s: %s", type(e).__name__, e)
         import traceback
         traceback.print_exc()
         raise
@@ -229,4 +279,4 @@ def start_scheduler():
 def stop_scheduler():
     """Останавливает планировщик"""
     scheduler.shutdown()
-    print("🛑 Планировщик остановлен")
+    logger.info("🛑 Планировщик остановлен")

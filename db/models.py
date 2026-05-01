@@ -1,3 +1,8 @@
+import logging
+
+logger = logging.getLogger(__name__)
+
+
 def create_table(conn):
     """Создает таблицу prayer_times если её нет"""
     conn.execute("""
@@ -9,16 +14,36 @@ def create_table(conn):
         dhuhr TEXT,
         asr TEXT,
         maghrib TEXT,
-        isha TEXT
+        isha TEXT,
+        month_updated INTEGER DEFAULT 0
     )
     """)
     conn.commit()
-    # Добавляем столбец shurooq, если его нет (для существующих таблиц)
+    # Добавляем столбцы для обратной совместимости с существующими таблицами
+    # Проверяем, какие колонки уже есть
+    existing_cols = [row[1] for row in conn.execute("PRAGMA table_info(prayer_times)").fetchall()]
+    
+    if 'shurooq' not in existing_cols:
+        try:
+            conn.execute("ALTER TABLE prayer_times ADD COLUMN shurooq TEXT")
+            conn.commit()
+            logger.info("✅ Добавлена колонка shurooq")
+        except Exception as e:
+            logger.warning("⚠️ Не удалось добавить колонку shurooq: %s", e)
+    
+    if 'month_updated' not in existing_cols:
+        try:
+            conn.execute("ALTER TABLE prayer_times ADD COLUMN month_updated INTEGER DEFAULT 0")
+            conn.commit()
+            logger.info("✅ Добавлена колонка month_updated")
+        except Exception as e:
+            logger.warning("⚠️ Не удалось добавить колонку month_updated: %s", e)
+    
+    # Создаем индекс для быстрого поиска по дате
     try:
-        conn.execute("ALTER TABLE prayer_times ADD COLUMN shurooq TEXT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_prayer_times_date ON prayer_times(date)")
         conn.commit()
     except Exception:
-        # Столбец уже существует, игнорируем ошибку
         pass
     
     # Создаем таблицу пользователей для хранения chat_id

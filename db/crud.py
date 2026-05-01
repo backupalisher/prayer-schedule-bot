@@ -1,7 +1,10 @@
 from datetime import datetime
+import logging
+
+logger = logging.getLogger(__name__)
 
 
-def insert_prayer(conn, data):
+def insert_prayer(conn, data, month_updated=None):
     """Вставляет или обновляет запись о времени намаза"""
     try:
         # Проверяем, существует ли уже запись
@@ -10,27 +13,46 @@ def insert_prayer(conn, data):
 
         if existing:
             # Обновляем существующую запись
-            conn.execute("""
-                         UPDATE prayer_times
-                         SET fajr=?,
-                             shurooq=?,
-                             dhuhr=?,
-                             asr=?,
-                             maghrib=?,
-                             isha=?
-                         WHERE date=?
-                         """, (data[1], data[2], data[3], data[4], data[5], data[6], data[0]))
+            if month_updated is not None:
+                conn.execute("""
+                             UPDATE prayer_times
+                             SET fajr=?,
+                                 shurooq=?,
+                                 dhuhr=?,
+                                 asr=?,
+                                 maghrib=?,
+                                 isha=?,
+                                 month_updated=?
+                             WHERE date=?
+                             """, (data[1], data[2], data[3], data[4], data[5], data[6], month_updated, data[0]))
+            else:
+                conn.execute("""
+                             UPDATE prayer_times
+                             SET fajr=?,
+                                 shurooq=?,
+                                 dhuhr=?,
+                                 asr=?,
+                                 maghrib=?,
+                                 isha=?
+                             WHERE date=?
+                             """, (data[1], data[2], data[3], data[4], data[5], data[6], data[0]))
         else:
             # Вставляем новую запись
-            conn.execute("""
-                         INSERT INTO prayer_times (date, fajr, shurooq, dhuhr, asr, maghrib, isha)
-                         VALUES (?, ?, ?, ?, ?, ?, ?)
-                         """, data)
+            if month_updated is not None:
+                conn.execute("""
+                             INSERT INTO prayer_times (date, fajr, shurooq, dhuhr, asr, maghrib, isha, month_updated)
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                             """, (*data, month_updated))
+            else:
+                conn.execute("""
+                             INSERT INTO prayer_times (date, fajr, shurooq, dhuhr, asr, maghrib, isha)
+                             VALUES (?, ?, ?, ?, ?, ?, ?)
+                             """, data)
 
         conn.commit()
         return True
     except Exception as e:
-        print(f"❌ Ошибка вставки/обновления для {data[0]}: {e}")
+        logger.error("❌ Ошибка вставки/обновления для %s: %s", data[0], e)
         return False
 
 
@@ -67,32 +89,69 @@ def get_by_month(conn, year: int, month: int):
     return cursor.fetchall()
 
 
+def get_date_range(conn):
+    """Получает минимальную и максимальную дату в таблице prayer_times"""
+    cursor = conn.execute("SELECT MIN(date), MAX(date) FROM prayer_times")
+    return cursor.fetchone()
+
+
+def is_data_actual(conn, year: int, month: int) -> bool:
+    """
+    Проверяет, актуальны ли данные в БД для указанного месяца.
+    Проверяет по month_updated или по наличию дат в диапазоне.
+    """
+    cursor = conn.execute(
+        "SELECT COUNT(*) FROM prayer_times WHERE date >= ? AND date < ?",
+        (f"{year}-{month:02d}-01",
+         f"{year}-{month+1:02d}-01" if month < 12 else f"{year+1}-01-01")
+    )
+    count = cursor.fetchone()[0]
+    return count > 0
+
+
+def get_prayer_by_date_and_name(conn, date: str, prayer_name: str) -> str:
+    """
+    Получает время конкретного намаза по дате и названию.
+    Возвращает строку времени в формате ЧЧ:ММ или None.
+    """
+    prayer_column_map = {
+        'Фаджр': 'fajr',
+        'Шурук': 'shurooq',
+        'Зухр': 'dhuhr',
+        'Аср': 'asr',
+        'Магриб': 'maghrib',
+        'Иша': 'isha',
+    }
+    col = prayer_column_map.get(prayer_name)
+    if not col:
+        return None
+    
+    cursor = conn.execute(
+        f"SELECT {col} FROM prayer_times WHERE date=?",
+        (date,)
+    )
+    row = cursor.fetchone()
+    return row[0] if row else None
+
+
 # Функции для работы с пользователями
 def insert_or_update_user(conn, chat_id, username=None, first_name=None, last_name=None):
-    """Добавляет или обновляет пользователя в БД"""
+    """Добавляет или обновляет пользователя в БД (UPSERT)"""
     try:
-        # Проверяем, существует ли уже пользователь
-        cursor = conn.execute("SELECT id FROM users WHERE chat_id=?", (str(chat_id),))
-        existing = cursor.fetchone()
-
-        if existing:
-            # Обновляем существующего пользователя
-            conn.execute("""
-                         UPDATE users 
-                         SET username=?, first_name=?, last_name=?, updated_at=CURRENT_TIMESTAMP
-                         WHERE chat_id=?
-                         """, (username, first_name, last_name, str(chat_id)))
-        else:
-            # Вставляем нового пользователя
-            conn.execute("""
-                         INSERT INTO users (chat_id, username, first_name, last_name)
-                         VALUES (?, ?, ?, ?)
-                         """, (str(chat_id), username, first_name, last_name))
+        conn.execute("""
+            INSERT INTO users (chat_id, username, first_name, last_name)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(chat_id) DO UPDATE SET
+                username=excluded.username,
+                first_name=excluded.first_name,
+                last_name=excluded.last_name,
+                updated_at=CURRENT_TIMESTAMP
+        """, (str(chat_id), username, first_name, last_name))
         
         conn.commit()
         return True
     except Exception as e:
-        print(f"❌ Ошибка при сохранении пользователя {chat_id}: {e}")
+        logger.error("❌ Ошибка при сохранении пользователя %s: %s", chat_id, e)
         return False
 
 
@@ -115,7 +174,7 @@ def update_user_subscription(conn, chat_id, subscribed):
         conn.commit()
         return True
     except Exception as e:
-        print(f"❌ Ошибка при обновлении подписки пользователя {chat_id}: {e}")
+        logger.error("❌ Ошибка при обновлении подписки пользователя %s: %s", chat_id, e)
         return False
 
 
@@ -126,5 +185,5 @@ def delete_user(conn, chat_id):
         conn.commit()
         return True
     except Exception as e:
-        print(f"❌ Ошибка при удалении пользователя {chat_id}: {e}")
+        logger.error("❌ Ошибка при удалении пользователя %s: %s", chat_id, e)
         return False

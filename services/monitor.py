@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 import aiohttp
 
-from config import BOT_TOKEN, USE_TELEGRAM, MONITOR_ALERTS_ENABLED
+from settings import BOT_TOKEN, USE_TELEGRAM, MONITOR_ALERTS_ENABLED
 from services.notifier import send_telegram_message
 
 # Настройка логирования

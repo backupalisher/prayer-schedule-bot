@@ -2,8 +2,12 @@ import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
 import re
+import logging
 from db.database import get_connection
-from db.crud import insert_prayer
+from db.crud import insert_prayer, is_data_actual
+
+# Настройка логирования
+logger = logging.getLogger(__name__)
 
 
 def get_current_month_from_url(url):
@@ -19,8 +23,17 @@ def get_current_month_from_url(url):
     return None
 
 
-def parse_and_save():
-    """Парсит расписание намазов с сайта umma.ru"""
+def parse_and_save(target_year=None, target_month=None):
+    """
+    Парсит расписание намазов с сайта umma.ru.
+    
+    Args:
+        target_year: Год для парсинга (если None, определяется из страницы)
+        target_month: Месяц для парсинга (если None, определяется из страницы)
+    
+    Returns:
+        bool: True если данные успешно сохранены
+    """
     url = "https://umma.ru/raspisanie-namaza/moscow"
 
     try:
@@ -36,13 +49,13 @@ def parse_and_save():
                 break
             except (requests.ConnectionError, requests.Timeout) as e:
                 if attempt == 2:
-                    print(f"❌ Ошибка сети после 3 попыток: {e}")
+                    logger.error("❌ Ошибка сети после 3 попыток: %s", e)
                     return False
-                print(f"⚠️ Попытка {attempt + 1} не удалась, повтор через 2 секунды...")
+                logger.warning("⚠️ Попытка %s не удалась, повтор через 2 секунды...", attempt + 1)
                 import time
                 time.sleep(2)
         else:
-            print("❌ Не удалось выполнить запрос после нескольких попыток")
+            logger.error("❌ Не удалось выполнить запрос после нескольких попыток")
             return False
 
         soup = BeautifulSoup(response.text, "html.parser")
@@ -59,12 +72,14 @@ def parse_and_save():
             # Альтернативный вариант: из URL
             month_from_url = get_current_month_from_url(url)
             if month_from_url:
-                current_year = datetime.now().year
+                # Извлекаем год из URL, если есть
+                url_year_match = re.search(r'(\d{4})', url)
+                current_year = int(url_year_match.group(1)) if url_year_match else datetime.now().year
                 month_year_str = f"{month_from_url} {current_year}"
                 month_match = re.search(r'(\w+) (\d{4})', month_year_str)
 
         if not month_match:
-            print("❌ Не удалось определить месяц и год, используем текущие")
+            logger.error("❌ Не удалось определить месяц и год, используем текущие")
             current_year = datetime.now().year
             current_month = datetime.now().month
         else:
@@ -80,7 +95,13 @@ def parse_and_save():
             current_month = months_ru.get(month_name.lower(), datetime.now().month)
             current_year = year
 
-        print(f"📅 Парсинг расписания на месяц {current_month}/{current_year}")
+        # Если указаны целевые месяц/год, используем их (для принудительного парсинга)
+        if target_year is not None:
+            current_year = target_year
+        if target_month is not None:
+            current_month = target_month
+
+        logger.info("📅 Парсинг расписания на месяц %s/%s", current_month, current_year)
 
         # 2. Ищем таблицу
         table = soup.find('table', class_=re.compile(r'prayer-table|table'))
@@ -88,12 +109,12 @@ def parse_and_save():
             table = soup.find('table')
 
         if not table:
-            print("❌ Не удалось найти таблицу на странице")
+            logger.error("❌ Не удалось найти таблицу на странице")
             return False
 
         rows = table.find_all('tr')
         if len(rows) < 2:
-            print("❌ Таблица пуста")
+            logger.error("❌ Таблица пуста")
             return False
 
         # 3. Определяем индексы нужных столбцов
@@ -133,12 +154,12 @@ def parse_and_save():
                 missing_cols.append(col)
 
         if missing_cols:
-            print(f"⚠️ Не найдены столбцы: {missing_cols}")
-            print(f"Найденные заголовки: {headers}")
+            logger.warning("⚠️ Не найдены столбцы: %s", missing_cols)
+            logger.warning("Найденные заголовки: %s", headers)
             # Пробуем использовать стандартные индексы как fallback
             # На сайте umma.ru обычно: 0-число, 1-фаджр, 2-шурук, 3-зухр, 4-аср, 5-магриб, 6-иша
             if len(headers) >= 7:
-                print("📌 Используем стандартные индексы столбцов")
+                logger.info("📌 Используем стандартные индексы столбцов")
                 col_index['fajr'] = 1
                 col_index['shurooq'] = 2
                 col_index['dhuhr'] = 3
@@ -148,9 +169,11 @@ def parse_and_save():
             else:
                 return False
 
-        print(f"✅ Индексы столбцов: день={col_index['day']}, фаджр={col_index['fajr']}, "
-              f"шурук={col_index['shurooq']}, зухр={col_index['dhuhr']}, аср={col_index['asr']}, "
-              f"магриб={col_index['maghrib']}, иша={col_index['isha']}")
+        logger.info("✅ Индексы столбцов: день=%s, фаджр=%s, "
+              "шурук=%s, зухр=%s, аср=%s, "
+              "магриб=%s, иша=%s", col_index['day'], col_index['fajr'],
+              col_index['shurooq'], col_index['dhuhr'], col_index['asr'],
+              col_index['maghrib'], col_index['isha'])
 
         # 4. Парсим строки
         data = []
@@ -174,7 +197,7 @@ def parse_and_save():
                 date_obj = datetime(current_year, current_month, day)
                 date_str = date_obj.strftime("%Y-%m-%d")
             except ValueError as e:
-                print(f"⚠️ Ошибка создания даты для дня {day}: {e}")
+                logger.warning("⚠️ Ошибка создания даты для дня %s: %s", day, e)
                 # Пропускаем невалидные даты (например, 31 февраля)
                 continue
 
@@ -212,25 +235,27 @@ def parse_and_save():
             if shurooq:
                 times_to_check.append(shurooq)
             if not all(time_pattern.match(t) for t in times_to_check):
-                print(f"⚠️ Неверный формат времени для {date_str}: "
-                      f"Ф={fajr}, Ш={shurooq}, З={dhuhr}, А={asr}, М={maghrib}, И={isha}")
+                logger.warning("⚠️ Неверный формат времени для %s: "
+                      "Ф=%s, Ш=%s, З=%s, А=%s, М=%s, И=%s",
+                      date_str, fajr, shurooq, dhuhr, asr, maghrib, isha)
                 continue
 
             data.append((date_str, fajr, shurooq, dhuhr, asr, maghrib, isha))
 
         if not data:
-            print("❌ Не удалось извлечь данные из таблицы")
+            logger.error("❌ Не удалось извлечь данные из таблицы")
             return False
 
-        # 5. Сохраняем в БД
+        # 5. Сохраняем в БД с отметкой месяца
         conn = get_connection()
         try:
             saved_count = 0
+            month_updated = current_year * 100 + current_month  # Например: 202604
             for row in data:
-                if insert_prayer(conn, row):
+                if insert_prayer(conn, row, month_updated=month_updated):
                     saved_count += 1
 
-            print(f"✅ Парсер записал {saved_count} из {len(data)} дней в БД")
+            logger.info("✅ Парсер записал %s из %s дней в БД (метка месяца: %s)", saved_count, len(data), month_updated)
 
             # Возвращаем True, если хотя бы одна запись сохранена
             return saved_count > 0
@@ -238,8 +263,57 @@ def parse_and_save():
             conn.close()
 
     except requests.RequestException as e:
-        print(f"❌ Ошибка сети: {e}")
+        logger.error("❌ Ошибка сети: %s", e)
         return False
     except Exception as e:
-        print(f"❌ Непредвиденная ошибка: {e}")
+        logger.error("❌ Непредвиденная ошибка: %s", e)
+        import traceback
+        traceback.print_exc()
         return False
+
+
+def ensure_current_month_data():
+    """
+    Проверяет наличие данных для текущего месяца в БД.
+    Если данных нет или они устарели — запускает парсинг.
+    Возвращает True если данные актуальны после проверки.
+    """
+    now = datetime.now()
+    year = now.year
+    month = now.month
+    
+    conn = get_connection()
+    try:
+        has_data = is_data_actual(conn, year, month)
+        conn.close()
+    except:
+        conn.close()
+        has_data = False
+    
+    if has_data:
+        logger.info("✅ Данные на %s/%s уже есть в БД", month, year)
+        return True
+    
+    logger.info("🔄 Данные на %s/%s отсутствуют, запускаю парсинг...", month, year)
+    return parse_and_save(target_year=year, target_month=month)
+
+
+def parse_next_month():
+    """
+    Парсит расписание на следующий месяц.
+    Вызывается 1-го числа каждого месяца после парсинга текущего.
+    """
+    now = datetime.now()
+    year = now.year
+    month = now.month
+    
+    # Следующий месяц
+    if month == 12:
+        next_year = year + 1
+        next_month = 1
+    else:
+        next_year = year
+        next_month = month + 1
+    
+    logger.info("🔄 Парсинг расписания на следующий месяц: %s/%s", next_month, next_year)
+    return parse_and_save(target_year=next_year, target_month=next_month)
