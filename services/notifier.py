@@ -23,6 +23,16 @@ PRAYER_TIMES = {
     "Иша": "isha",
 }
 
+# Эмодзи для каждого намаза
+PRAYER_EMOJIS = {
+    "Фаджр": "🌅",
+    "Шурук": "🌄",
+    "Зухр": "☀️",
+    "Аср": "🏜️",
+    "Магриб": "🌇",
+    "Иша": "🌙",
+}
+
 
 async def send_telegram_message(text, chat_id=None, max_retries=3, timeout=10):
     """Отправляет сообщение в Telegram с повторными попытками и таймаутами"""
@@ -121,7 +131,15 @@ async def send_telegram_message_to_all(text, max_retries=3, timeout=10):
 
 async def notify_async(prayer_name):
     """Асинхронное уведомление о времени намаза"""
-    message = f"🕌 Время намаза: {prayer_name} \nСпешите к спасению!"
+    # Получаем время намаза из БД
+    prayer_time = await get_prayer_time_from_db(prayer_name)
+    emoji = PRAYER_EMOJIS.get(prayer_name, "🕌")
+    
+    if prayer_time:
+        message = f"🕌 Время намаза: {emoji} {prayer_name}: {prayer_time}"
+    else:
+        message = f"🕌 Время намаза: {prayer_name}"
+    
     logger.info("🔔 %s", message)
     
     try:
@@ -139,7 +157,24 @@ async def notify_async(prayer_name):
 
 def notify(prayer_name):
     """Синхронная обертка для уведомления (для использования из планировщика)"""
-    message = f"🕌 Время намаза: {prayer_name} \nСпешите к спасению!"
+    # Получаем время намаза из БД (синхронно)
+    prayer_time = None
+    try:
+        from db.crud import get_prayer_by_date_and_name
+        conn = get_connection()
+        today_str = datetime.now(MOSCOW_TZ).strftime("%Y-%m-%d")
+        prayer_time = get_prayer_by_date_and_name(conn, today_str, prayer_name)
+        conn.close()
+    except Exception as e:
+        logger.warning("⚠️ Не удалось получить время из БД: %s", e)
+
+    emoji = PRAYER_EMOJIS.get(prayer_name, "🕌")
+
+    if prayer_time:
+        message = f"🕌 Время намаза: {emoji} {prayer_name}: {prayer_time}"
+    else:
+        message = f"🕌 Время намаза: {prayer_name}"
+
     logger.info("🔔 %s", message)
     
     if not USE_TELEGRAM or not BOT_TOKEN:
