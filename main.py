@@ -49,6 +49,8 @@ def acquire_lock() -> bool:
 def release_lock():
     """Освобождает блокировку"""
     global _lock_file
+    if _lock_file is None:
+        return
     try:
         fcntl.flock(_lock_file, fcntl.LOCK_UN)
         _lock_file.close()
@@ -137,9 +139,7 @@ async def main():
         except KeyboardInterrupt:
             logger.info("🛑 Программа остановлена пользователем")
         finally:
-            # Останавливаем мониторинг при выходе
-            logger.info("🛑 Остановка системы мониторинга...")
-            await stop_monitoring()
+            await shutdown()
 
 
 async def shutdown():

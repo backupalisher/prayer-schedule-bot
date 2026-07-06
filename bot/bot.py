@@ -8,6 +8,9 @@ import os
 import sys
 import logging
 from datetime import datetime
+import pytz
+
+MOSCOW_TZ = pytz.timezone('Europe/Moscow')
 
 from settings import BOT_TOKEN, CHAT_ID
 from services.notifier import get_today_prayers, get_next_prayer
@@ -183,7 +186,7 @@ async def pdf_handler(message: Message):
         # Сохраняем пользователя в БД
         await save_user_info(message)
 
-        now = datetime.now()
+        now = datetime.now(MOSCOW_TZ)
         year = now.year
         month = now.month
 

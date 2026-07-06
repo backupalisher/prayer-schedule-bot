@@ -139,12 +139,13 @@ def insert_or_update_user(conn, chat_id, username=None, first_name=None, last_na
     """Добавляет или обновляет пользователя в БД (UPSERT)"""
     try:
         conn.execute("""
-            INSERT INTO users (chat_id, username, first_name, last_name)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO users (chat_id, username, first_name, last_name, subscribed)
+            VALUES (?, ?, ?, ?, 1)
             ON CONFLICT(chat_id) DO UPDATE SET
                 username=excluded.username,
                 first_name=excluded.first_name,
                 last_name=excluded.last_name,
+                subscribed=1,
                 updated_at=CURRENT_TIMESTAMP
         """, (str(chat_id), username, first_name, last_name))
         

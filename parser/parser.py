@@ -66,8 +66,8 @@ def parse_and_save(target_year=None, target_month=None):
         month_year_str = title_tag.get_text(strip=True) if title_tag else ""
         # Пример: "Время намаза на Апрель 2026 для Москва"
 
-        # Извлекаем месяц и год из заголовка
-        month_match = re.search(r'на (\w+) (\d{4})', month_year_str)
+        # Извлекаем месяц и год из заголовка (регистронезависимо для кириллицы)
+        month_match = re.search(r'на\s+(\S+)\s+(\d{4})', month_year_str, re.IGNORECASE)
         if not month_match:
             # Альтернативный вариант: из URL
             month_from_url = get_current_month_from_url(url)
@@ -95,11 +95,22 @@ def parse_and_save(target_year=None, target_month=None):
             current_month = months_ru.get(month_name.lower(), datetime.now().month)
             current_year = year
 
-        # Если указаны целевые месяц/год, используем их (для принудительного парсинга)
-        if target_year is not None:
-            current_year = target_year
-        if target_month is not None:
-            current_month = target_month
+        page_year = current_year
+        page_month = current_month
+
+        # Принудительный месяц допустим только если совпадает с данными на странице
+        if target_year is not None or target_month is not None:
+            expected_year = target_year if target_year is not None else page_year
+            expected_month = target_month if target_month is not None else page_month
+            if expected_year != page_year or expected_month != page_month:
+                logger.error(
+                    "❌ Страница содержит %s/%s, а запрошен %s/%s. "
+                    "umma.ru не предоставляет отдельный URL для другого месяца — парсинг пропущен.",
+                    page_month, page_year, expected_month, expected_year
+                )
+                return False
+            current_year = expected_year
+            current_month = expected_month
 
         logger.info("📅 Парсинг расписания на месяц %s/%s", current_month, current_year)
 
@@ -295,25 +306,25 @@ def ensure_current_month_data():
         return True
     
     logger.info("🔄 Данные на %s/%s отсутствуют, запускаю парсинг...", month, year)
-    return parse_and_save(target_year=year, target_month=month)
+    return parse_and_save()
 
 
 def parse_next_month():
     """
-    Парсит расписание на следующий месяц.
-    Вызывается 1-го числа каждого месяца после парсинга текущего.
+    Парсит расписание на следующий месяц, если umma.ru уже показывает его на главной странице.
+    На практике сайт отдаёт только текущий месяц — задача проверяет совпадение и пропускает
+    парсинг при несоответствии, чтобы не записать неверные даты в БД.
     """
     now = datetime.now()
     year = now.year
     month = now.month
-    
-    # Следующий месяц
+
     if month == 12:
         next_year = year + 1
         next_month = 1
     else:
         next_year = year
         next_month = month + 1
-    
-    logger.info("🔄 Парсинг расписания на следующий месяц: %s/%s", next_month, next_year)
+
+    logger.info("🔄 Попытка парсинга следующего месяца: %s/%s", next_month, next_year)
     return parse_and_save(target_year=next_year, target_month=next_month)

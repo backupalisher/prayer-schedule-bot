@@ -243,7 +243,7 @@ def get_today_prayers():
     from db.crud import get_by_date
     conn = get_connection()
     try:
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now(MOSCOW_TZ).strftime("%Y-%m-%d")
         row = get_by_date(conn, today)
 
         if not row:
@@ -271,74 +271,77 @@ def get_next_prayer():
     """Возвращает следующий намаз (сегодня или завтра)"""
     from db.crud import get_by_date
     conn = get_connection()
-    now = datetime.now()
-    today = now.strftime("%Y-%m-%d")
+    try:
+        now = datetime.now(MOSCOW_TZ).replace(tzinfo=None)
+        today = now.strftime("%Y-%m-%d")
 
-    # Получаем расписание на сегодня
-    today_row = get_by_date(conn, today)
+        today_row = get_by_date(conn, today)
 
-    if not today_row:
-        return "❌ Нет данных на сегодня"
+        if not today_row:
+            return "❌ Нет данных на сегодня"
 
-    # Проверяем намазы на сегодня (все 6 намазов)
-    prayers_today = [
-        ("Фаджр", today_row[2]),
-        ("Шурук", today_row[3]),
-        ("Зухр", today_row[4]),
-        ("Аср", today_row[5]),
-        ("Магриб", today_row[6]),
-        ("Иша", today_row[7]),
-    ]
+        prayers_today = [
+            ("Фаджр", today_row[2]),
+            ("Шурук", today_row[3]),
+            ("Зухр", today_row[4]),
+            ("Аср", today_row[5]),
+            ("Магриб", today_row[6]),
+            ("Иша", today_row[7]),
+        ]
 
-    for name, time_str in prayers_today:
-        try:
-            prayer_time = datetime.strptime(time_str, "%H:%M").replace(
-                year=now.year,
-                month=now.month,
-                day=now.day
-            )
+        for name, time_str in prayers_today:
+            if not time_str:
+                continue
+            try:
+                prayer_time = datetime.strptime(time_str, "%H:%M").replace(
+                    year=now.year,
+                    month=now.month,
+                    day=now.day
+                )
 
-            if prayer_time > now:
-                diff = prayer_time - now
-                hours, remainder = divmod(diff.seconds, 3600)
+                if prayer_time > now:
+                    diff = prayer_time - now
+                    total_seconds = int(diff.total_seconds())
+                    hours, remainder = divmod(total_seconds, 3600)
+                    minutes = remainder // 60
+
+                    return (
+                        f"🕌 <b>Следующий намаз:</b> {name}\n"
+                        f"⏰ Время: {time_str}\n"
+                        f"⌛ Через: {hours} ч {minutes} мин"
+                    )
+            except ValueError:
+                continue
+
+        tomorrow = (now + timedelta(days=1)).strftime("%Y-%m-%d")
+        tomorrow_row = get_by_date(conn, tomorrow)
+
+        if tomorrow_row:
+            fajr_tomorrow = tomorrow_row[2]
+            try:
+                fajr_time = datetime.strptime(fajr_tomorrow, "%H:%M").replace(
+                    year=now.year,
+                    month=now.month,
+                    day=now.day
+                ) + timedelta(days=1)
+
+                diff = fajr_time - now
+                total_seconds = int(diff.total_seconds())
+                hours, remainder = divmod(total_seconds, 3600)
                 minutes = remainder // 60
 
                 return (
-                    f"🕌 <b>Следующий намаз:</b> {name}\n"
-                    f"⏰ Время: {time_str}\n"
+                    f"🌙 <b>Все намазы на сегодня завершены</b>\n\n"
+                    f"🕌 <b>Следующий намаз:</b> Фаджр (завтра)\n"
+                    f"⏰ Время: {fajr_tomorrow}\n"
                     f"⌛ Через: {hours} ч {minutes} мин"
                 )
-        except ValueError:
-            continue
+            except ValueError:
+                pass
 
-    # Если все намазы на сегодня прошли, ищем Фаджр на завтра
-    tomorrow = (now + timedelta(days=1)).strftime("%Y-%m-%d")
-    tomorrow_row = get_by_date(conn, tomorrow)
-
-    if tomorrow_row:
-        fajr_tomorrow = tomorrow_row[2]
-        try:
-            fajr_time = datetime.strptime(fajr_tomorrow, "%H:%M").replace(
-                year=now.year,
-                month=now.month,
-                day=now.day
-            )
-            fajr_time = fajr_time + timedelta(days=1)
-
-            diff = fajr_time - now
-            hours, remainder = divmod(diff.seconds, 3600)
-            minutes = remainder // 60
-
-            return (
-                f"🌙 <b>Все намазы на сегодня завершены</b>\n\n"
-                f"🕌 <b>Следующий намаз:</b> Фаджр (завтра)\n"
-                f"⏰ Время: {fajr_tomorrow}\n"
-                f"⌛ Через: {hours} ч {minutes} мин"
-            )
-        except ValueError:
-            pass
-
-    return "🌙 На сегодня намазы завершены. Нет данных на завтра."
+        return "🌙 На сегодня намазы завершены. Нет данных на завтра."
+    finally:
+        conn.close()
 
 
 async def prayer_time_worker():

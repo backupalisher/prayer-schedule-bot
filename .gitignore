@@ -53,6 +53,8 @@ identifier.sqlite
 # Logs
 *.log
 logs/
+bot.pid
+bot.log
 
 # OS
 .DS_Store
