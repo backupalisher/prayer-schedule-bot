@@ -291,11 +291,9 @@ async def set_commands():
 
 
 async def start_bot():
-    """Запускает бота"""
+    """Запускает бота с автоматическим переподключением при сбоях polling."""
     bot_instance = init_bot()
 
-    # Принудительно удаляем webhook перед стартом polling
-    # Это гарантирует, что не будет конфликта между webhook и polling
     try:
         webhook_info = await bot_instance.get_webhook_info()
         if webhook_info.url:
@@ -309,29 +307,43 @@ async def start_bot():
     logger.info("🚀 Бот запущен и готов к работе")
 
     max_conflict_retries = 5
-    conflict_retries = 0
+    polling_retries = 0
+    max_polling_retries = 100
 
-    while conflict_retries < max_conflict_retries:
-        try:
-            await dp.start_polling(bot_instance)
-            break  # Нормальное завершение polling
-        except TelegramConflictError as e:
-            conflict_retries += 1
-            logger.error(
-                "🚫 TelegramConflictError: %s. "
-                "Попытка %s/%s. "
-                "Убедитесь, что только один экземпляр бота запущен с токеном %s...",
-                e, conflict_retries, max_conflict_retries, BOT_TOKEN[:8] + "..."
-            )
-            if conflict_retries >= max_conflict_retries:
-                logger.critical(
-                    "🚫 КРИТИЧЕСКАЯ ОШИБКА: TelegramConflictError не устранён после %s попыток. "
-                    "Завершение работы. Возможные причины:\n"
-                    "  1. Другой экземпляр бота запущен в другом терминале/сессии\n"
-                    "  2. Бот запущен на другом сервере\n"
-                    "  3. Предыдущий процесс не был завершён корректно\n"
-                    "Решение: завершите все процессы main.py и запустите бот снова.",
-                    max_conflict_retries
+    while polling_retries < max_polling_retries:
+        conflict_retries = 0
+
+        while conflict_retries < max_conflict_retries:
+            try:
+                await dp.start_polling(bot_instance)
+                logger.warning("⚠️ Polling завершился без ошибки, перезапуск через 5 сек...")
+                await asyncio.sleep(5)
+                break
+            except TelegramConflictError as e:
+                conflict_retries += 1
+                logger.error(
+                    "🚫 TelegramConflictError: %s. Попытка %s/%s.",
+                    e, conflict_retries, max_conflict_retries
                 )
+                if conflict_retries >= max_conflict_retries:
+                    logger.critical(
+                        "🚫 TelegramConflictError не устранён. "
+                        "Завершите другие экземпляры бота с тем же токеном."
+                    )
+                    raise
+                await asyncio.sleep(5)
+            except asyncio.CancelledError:
+                logger.info("🛑 Polling отменён")
                 raise
-            await asyncio.sleep(5)
+            except Exception as e:
+                polling_retries += 1
+                delay = min(60, 5 * polling_retries)
+                logger.error(
+                    "❌ Ошибка polling (%s/%s): %s: %s. Перезапуск через %s сек...",
+                    polling_retries, max_polling_retries, type(e).__name__, e, delay
+                )
+                await asyncio.sleep(delay)
+                break
+
+    logger.critical("🚫 Превышен лимит перезапусков polling (%s)", max_polling_retries)
+    raise RuntimeError("Polling failed after maximum retries")

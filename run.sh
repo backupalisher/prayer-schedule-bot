@@ -12,6 +12,8 @@ LOG_FILE="$SCRIPT_DIR/bot.log"
 VENV_DIR="$SCRIPT_DIR/.venv"
 ENV_FILE="$SCRIPT_DIR/.env"
 MAIN="$SCRIPT_DIR/main.py"
+SERVICE_NAME="prayer-bot"
+SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 
 # Можно переопределить: PYTHON_BIN=python3.12 ./run.sh setup
 PYTHON_BIN="${PYTHON_BIN:-}"
@@ -154,7 +156,11 @@ ensure_venv() {
 }
 
 get_pid() {
-    pgrep -f "${VENV_DIR}/bin/python ${MAIN}" 2>/dev/null | head -1 || true
+    pgrep -f "[p]ython.*${MAIN}" 2>/dev/null | head -1 || true
+}
+
+is_systemd_active() {
+    systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null
 }
 
 is_running() {
@@ -220,6 +226,13 @@ cmd_start() {
 }
 
 cmd_stop() {
+    if is_systemd_active; then
+        log_info "Остановка systemd-сервиса $SERVICE_NAME..."
+        sudo systemctl stop "$SERVICE_NAME"
+        log_info "Сервис остановлен"
+        return 0
+    fi
+
     if ! is_running; then
         log_warn "Бот не запущен"
         rm -f "$PID_FILE"
@@ -255,14 +268,83 @@ cmd_restart() {
 }
 
 cmd_status() {
+    if is_systemd_active; then
+        log_info "Systemd-сервис $SERVICE_NAME активен"
+        systemctl status "$SERVICE_NAME" --no-pager -l | head -15
+        return 0
+    fi
+
     if is_running; then
         local pid
         pid="$(get_pid)"
         log_info "Бот работает (PID: $pid)"
         ps -p "$pid" -o pid,etime,cmd --no-headers 2>/dev/null || true
+        log_warn "Рекомендуется: ./run.sh install-service && ./run.sh enable-service"
     else
         log_warn "Бот не запущен"
         exit 1
+    fi
+}
+
+cmd_install_service() {
+    ensure_venv
+    resolve_paths
+
+    if [[ ! -x "$PYTHON" ]]; then
+        log_error "Python не найден: $PYTHON. Сначала выполните ./run.sh setup"
+        exit 1
+    fi
+
+    local template="$SCRIPT_DIR/deploy/prayer-bot.service"
+    if [[ ! -f "$template" ]]; then
+        log_error "Шаблон не найден: $template"
+        exit 1
+    fi
+
+    sed \
+        -e "s|__WORKDIR__|$SCRIPT_DIR|g" \
+        -e "s|__PYTHON__|$PYTHON|g" \
+        -e "s|__MAIN__|$MAIN|g" \
+        -e "s|__LOGFILE__|$LOG_FILE|g" \
+        "$template" | sudo tee "$SERVICE_FILE" >/dev/null
+
+    sudo systemctl daemon-reload
+    log_info "Сервис установлен: $SERVICE_FILE"
+    log_info "Запуск: sudo ./run.sh enable-service"
+}
+
+cmd_enable_service() {
+    if [[ ! -f "$SERVICE_FILE" ]]; then
+        log_error "Сервис не установлен. Выполните: ./run.sh install-service"
+        exit 1
+    fi
+
+    if is_running && ! is_systemd_active; then
+        log_warn "Останавливаю процесс, запущенный через nohup..."
+        cmd_stop || true
+        sleep 2
+    fi
+
+    sudo systemctl enable "$SERVICE_NAME"
+    sudo systemctl restart "$SERVICE_NAME"
+    sleep 2
+
+    if is_systemd_active; then
+        log_info "Сервис $SERVICE_NAME запущен с автоперезапуском"
+        systemctl status "$SERVICE_NAME" --no-pager -l | head -10
+    else
+        log_error "Не удалось запустить сервис. Лог:"
+        journalctl -u "$SERVICE_NAME" -n 20 --no-pager || true
+        exit 1
+    fi
+}
+
+cmd_disable_service() {
+    if [[ -f "$SERVICE_FILE" ]]; then
+        sudo systemctl disable --now "$SERVICE_NAME" 2>/dev/null || true
+        log_info "Systemd-сервис остановлен и отключён"
+    else
+        log_warn "Systemd-сервис не установлен"
     fi
 }
 
@@ -275,23 +357,30 @@ cmd_logs() {
 }
 
 usage() {
-    echo "Использование: $0 {start|stop|restart|status|logs|setup}"
+    echo "Использование: $0 {start|stop|restart|status|logs|setup|install-service|enable-service|disable-service}"
     echo ""
-    echo "  setup   — создать .env и установить зависимости"
-    echo "  start   — запустить бота в фоне"
-    echo "  stop    — остановить бота"
-    echo "  restart — перезапустить бота"
-    echo "  status  — проверить статус"
-    echo "  logs    — следить за логами (tail -f)"
+    echo "  setup            — создать .env и установить зависимости"
+    echo "  start            — запустить бота в фоне (nohup, без автоперезапуска)"
+    echo "  stop             — остановить бота"
+    echo "  restart          — перезапустить бота"
+    echo "  status           — проверить статус"
+    echo "  logs             — следить за логами (tail -f)"
+    echo ""
+    echo "  install-service  — установить systemd-сервис (рекомендуется для сервера)"
+    echo "  enable-service   — включить автозапуск и автоперезапуск через systemd"
+    echo "  disable-service  — остановить и отключить systemd-сервис"
 }
 
 case "${1:-}" in
-    start)   cmd_start ;;
-    stop)    cmd_stop ;;
-    restart) cmd_restart ;;
-    status)  cmd_status ;;
-    logs)    cmd_logs ;;
-    setup)   cmd_setup ;;
+    start)            cmd_start ;;
+    stop)             cmd_stop ;;
+    restart)          cmd_restart ;;
+    status)           cmd_status ;;
+    logs)             cmd_logs ;;
+    setup)            cmd_setup ;;
+    install-service)  cmd_install_service ;;
+    enable-service)   cmd_enable_service ;;
+    disable-service)  cmd_disable_service ;;
     *)
         usage
         exit 1

@@ -107,39 +107,36 @@ async def main():
         logger.info("📊 Мониторинг состояния бота отключен (MONITOR_ALERTS_ENABLED=False)")
 
     # Запускаем бота (только если USE_TELEGRAM=True)
-    if USE_TELEGRAM:
-        logger.info("🤖 Запуск Telegram бота...")
-        await start_bot()
-    else:
-        logger.info("📡 Telegram бот отключен (USE_TELEGRAM=False)")
-        logger.info("⏳ Планировщик и мониторинг работают в фоновом режиме...")
-        
-        # Держим программу запущенной с периодической проверкой статуса
-        try:
+    try:
+        if USE_TELEGRAM:
+            logger.info("🤖 Запуск Telegram бота...")
+            await start_bot()
+        else:
+            logger.info("📡 Telegram бот отключен (USE_TELEGRAM=False)")
+            logger.info("⏳ Планировщик и мониторинг работают в фоновом режиме...")
+
             check_counter = 0
             while True:
-                await asyncio.sleep(60)  # Проверка каждую минуту
+                await asyncio.sleep(60)
                 check_counter += 1
-                
-                # Каждые 5 минут выводим статус мониторинга
+
                 if check_counter % 5 == 0:
                     status = get_monitor_status()
                     if status:
                         health = status['health']
                         failures = status['failure_count']
                         max_failures = status['max_failures']
-                        
+
                         if health == 'healthy':
                             logger.info("📊 Мониторинг: ✅ Здоров (сбоев: %s/%s)", failures, max_failures)
                         elif health == 'warning':
                             logger.warning("📊 Мониторинг: ⚠️ Предупреждение (сбоев: %s/%s)", failures, max_failures)
                         elif health == 'critical':
                             logger.error("📊 Мониторинг: 🚨 Критично (сбоев: %s/%s)", failures, max_failures)
-                            
-        except KeyboardInterrupt:
-            logger.info("🛑 Программа остановлена пользователем")
-        finally:
-            await shutdown()
+    except KeyboardInterrupt:
+        logger.info("🛑 Программа остановлена пользователем")
+    finally:
+        await shutdown()
 
 
 async def shutdown():
@@ -174,9 +171,6 @@ async def shutdown():
 if __name__ == "__main__":
     try:
         asyncio.run(main())
-    except KeyboardInterrupt:
-        asyncio.run(shutdown())
-        sys.exit(0)
     except Exception as e:
         logger.error("❌ Неожиданная ошибка: %s", e)
         import traceback

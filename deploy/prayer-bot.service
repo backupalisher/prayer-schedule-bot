@@ -1,0 +1,18 @@
+[Unit]
+Description=Prayer Schedule Telegram Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__WORKDIR__
+ExecStart=__PYTHON__ __MAIN__
+Restart=always
+RestartSec=10
+TimeoutStopSec=30
+StandardOutput=append:__LOGFILE__
+StandardError=append:__LOGFILE__
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
