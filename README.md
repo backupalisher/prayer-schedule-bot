@@ -17,33 +17,10 @@ Telegram бот для получения расписания намазов с
 
 ## Установка
 
-1. Клонируйте репозиторий:
-```bash
-git clone <repository-url>
-cd Prayer
-```
-
-2. Создайте виртуальное окружение и активируйте его:
-```bash
-python3 -m venv .venv
-source .venv/bin/activate  # Linux/Mac
-# или
-.venv\Scripts\activate  # Windows
-```
-
-3. Установите зависимости:
-```bash
-pip install -r requirements.txt
-```
-
-4. Настройте переменные окружения:
-```bash
-cp .env.example .env
-```
 Отредактируйте файл `.env`:
 ```env
 BOT_TOKEN=your_bot_token_here
-CHAT_ID=your_chat_id_here
+CHAT_ID=your_chat_id_here (опционально)
 USE_TELEGRAM=True
 ```
 
@@ -58,50 +35,16 @@ USE_TELEGRAM=True
 
 ### Основной запуск:
 ```bash
-python main.py
+run.sh $0 {start|stop|restart|status|logs|setup|install-service|enable-service|disable-service}
 ```
-
-### Тестирование парсера:
-```bash
-python test_parser.py
+    setup            — создать .env и установить зависимости
+    start            — запустить бота в фоне (nohup, без автоперезапуска)
+    stop             — остановить бота
+    restart          — перезапустить бота
+    status           — проверить статус
+    logs             — следить за логами (tail -f)
+    
+    install-service  — установить systemd-сервис (рекомендуется для сервера)
+    enable-service   — включить автозапуск и автоперезапуск через systemd
+    disable-service  — остановить и отключить systemd-сервис
 ```
-
-## Структура проекта
-
-```
-Prayer/
-├── main.py              # Главный файл приложения
-├── config.py            # Конфигурация
-├── requirements.txt     # Зависимости
-├── .env.example        # Шаблон переменных окружения
-├── README.md           # Документация
-├── bot/
-│   └── bot.py          # Telegram бот
-├── parser/
-│   └── parser.py       # Парсер расписания
-├── scheduler/
-│   └── scheduler.py    # Планировщик задач
-├── services/
-│   ├── notifier.py     # Уведомления
-│   ├── pdf_generator.py # Генерация PDF
-│   └── prayer_service.py # Сервис работы с данными
-└── db/
-    ├── database.py     # Подключение к БД
-    ├── models.py       # Модели БД
-    └── crud.py         # CRUD операции
-```
-
-## Решенные проблемы
-
-1. ✅ **Безопасность**: Создан `.env.example` для защиты токенов
-2. ✅ **Зависимости**: Добавлен `requirements.txt`
-3. ✅ **Асинхронность**: Исправлены проблемы с event loop в `notifier.py`
-4. ✅ **Индексы**: Заменены жестко закодированные индексы на именованные константы
-5. ✅ **Race condition**: Добавлена потокобезопасная инициализация бота
-6. ✅ **Временные зоны**: Добавлена поддержка временной зоны Москвы
-7. ✅ **Обработка ошибок**: Улучшена обработка ошибок в парсере
-8. ✅ **Валидация**: Добавлена валидация дат и времени
-
-## Лицензия
-
-MIT
