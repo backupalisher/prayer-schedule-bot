@@ -9,7 +9,7 @@
 2. Нажмите кнопку "+" в правом верхнем углу и выберите "New repository"
 3. Заполните информацию:
    - **Repository name**: prayer-schedule-bot (или другое название)
-   - **Description**: Telegram бот для расписания намазов с парсингом с umma.ru
+   - **Description**: Telegram бот для расписания намазов с offline-расчётом (adhanpy)
    - Выберите "Public" или "Private"
    - **Не добавляйте** README, .gitignore или license (они уже есть в проекте)
 
@@ -41,7 +41,7 @@ gh repo create prayer-schedule-bot --public --source=. --remote=origin --push
 prayer-schedule-bot/
 ├── bot/              # Telegram бот
 ├── db/               # База данных и модели
-├── parser/           # Парсер расписания с umma.ru
+├── parser/           # Offline-заполнение расписания (adhanpy)
 ├── scheduler/        # Планировщик уведомлений
 ├── services/         # Сервисы (уведомления, PDF генерация)
 ├── assets/           # Ресурсы (шрифты)

@@ -30,7 +30,7 @@ def schedule_notifications():
         row = get_by_date(conn, today)
 
         if not row:
-            logger.warning("⚠️ Нет данных для %s, пробую загрузить через парсер...", today)
+            logger.warning("⚠️ Нет данных для %s, пробую offline-расчёт...", today)
             if ensure_current_month_data():
                 row = get_by_date(conn, today)
             if not row:
@@ -113,7 +113,7 @@ def start_scheduler():
             logger.warning("⚠️ Планировщик уже запущен, пропускаем повторный запуск")
             return
         
-        # Парсинг расписания 1-го числа каждого месяца в 00:30
+        # Offline-расчёт расписания 1-го числа каждого месяца в 00:30
         scheduler.add_job(
             parse_and_save,
             "cron",
@@ -124,9 +124,9 @@ def start_scheduler():
             replace_existing=True,
             misfire_grace_time=3600  # 1 час на выполнение пропущенной задачи
         )
-        logger.info("📅 Задача парсинга расписания запланирована (1-е число месяца, 00:30)")
+        logger.info("📅 Задача offline-расчёта расписания запланирована (1-е число месяца, 00:30)")
 
-        # Парсинг следующего месяца 1-го числа в 01:00 (после парсинга текущего)
+        # Offline-расчёт следующего месяца 1-го числа в 01:00
         scheduler.add_job(
             parse_next_month,
             "cron",
@@ -137,7 +137,7 @@ def start_scheduler():
             replace_existing=True,
             misfire_grace_time=3600
         )
-        logger.info("📅 Задача парсинга следующего месяца запланирована (1-е число, 01:00)")
+        logger.info("📅 Задача offline-расчёта следующего месяца запланирована (1-е число, 01:00)")
 
         # Планирование уведомлений каждый день в 00:05
         scheduler.add_job(

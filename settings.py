@@ -55,6 +55,14 @@ class Settings(BaseSettings):
     # Monitoring
     monitor_alerts_enabled: bool = False
 
+    # Offline-расчёт намазов (координаты Москвы / ДУМ РФ по умолчанию)
+    prayer_latitude: float = 55.7558
+    prayer_longitude: float = 37.6173
+    prayer_timezone: str = "Europe/Moscow"
+    prayer_use_hanafi: bool = True
+    prayer_fajr_angle: float = 16.0
+    prayer_isha_angle: float = 15.0
+
     # PDF
     pdf: PDFSettings = PDFSettings()
 
@@ -74,3 +82,11 @@ CHAT_ID = settings.chat_id
 DATABASE_URL = settings.database_url
 MONITOR_ALERTS_ENABLED = settings.monitor_alerts_enabled
 PDF_SETTINGS = settings.pdf
+
+# Параметры offline-расчёта намазов
+PRAYER_LATITUDE = settings.prayer_latitude
+PRAYER_LONGITUDE = settings.prayer_longitude
+PRAYER_TIMEZONE = settings.prayer_timezone
+PRAYER_USE_HANAFI = settings.prayer_use_hanafi
+PRAYER_FAJR_ANGLE = settings.prayer_fajr_angle
+PRAYER_ISHA_ANGLE = settings.prayer_isha_angle
