@@ -1,21 +1,17 @@
 from pydantic_settings import BaseSettings
 from typing import Optional
-from pathlib import Path
 
 
 class PDFSettings(BaseSettings):
     """Настройки генерации PDF-календаря"""
-    # Путь сохранения PDF (по умолчанию корень проекта)
     pdf_output_dir: str = "."
 
-    # Шрифты
     pdf_font_regular: str = "assets/fonts/Inter-Regular.ttf"
     pdf_font_bold: str = "assets/fonts/Inter-Bold.ttf"
     pdf_font_semibold: str = "assets/fonts/Inter-SemiBold.ttf"
     pdf_font_light: str = "assets/fonts/Inter-Light.ttf"
     pdf_font_fallback: str = "assets/fonts/DejaVuSans.ttf"
 
-    # Цветовая схема
     pdf_color_accent: str = "#1976d2"
     pdf_color_accent_light: str = "#e3f2fd"
     pdf_color_bg: str = "#fafafa"
@@ -27,13 +23,11 @@ class PDFSettings(BaseSettings):
     pdf_color_friday: str = "#fff3e0"
     pdf_color_grid: str = "#e0e0e0"
 
-    # Размеры
     pdf_cell_size_mm: int = 25
     pdf_margin_mm: int = 3
     pdf_gap_mm: int = 2
     pdf_corner_radius: int = 4
 
-    # Поведение
     pdf_open_after_generate: bool = False
 
     model_config = {
@@ -55,7 +49,7 @@ class Settings(BaseSettings):
     # Monitoring
     monitor_alerts_enabled: bool = False
 
-    # Offline-расчёт намазов (координаты Москвы / ДУМ РФ по умолчанию)
+    # Дефолтный профиль (используется как fallback / для тестов)
     prayer_latitude: float = 55.7558
     prayer_longitude: float = 37.6173
     prayer_timezone: str = "Europe/Moscow"
@@ -75,7 +69,6 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
-# Для обратной совместимости с существующим кодом
 USE_TELEGRAM = settings.use_telegram
 BOT_TOKEN = settings.bot_token
 CHAT_ID = settings.chat_id
@@ -83,7 +76,6 @@ DATABASE_URL = settings.database_url
 MONITOR_ALERTS_ENABLED = settings.monitor_alerts_enabled
 PDF_SETTINGS = settings.pdf
 
-# Параметры offline-расчёта намазов
 PRAYER_LATITUDE = settings.prayer_latitude
 PRAYER_LONGITUDE = settings.prayer_longitude
 PRAYER_TIMEZONE = settings.prayer_timezone

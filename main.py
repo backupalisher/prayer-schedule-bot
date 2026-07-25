@@ -6,7 +6,6 @@ import fcntl
 from scheduler.scheduler import start_scheduler, schedule_notifications, start_prayer_worker, stop_prayer_worker
 from bot.bot import start_bot
 from db.database import init_db
-from services.notifier import get_today_prayers
 from parser.parser import ensure_current_month_data
 from settings import USE_TELEGRAM, MONITOR_ALERTS_ENABLED
 from services.monitor import start_monitoring, stop_monitoring, get_monitor_status
@@ -74,23 +73,20 @@ async def main():
     init_db()
     logger.info("✅ База данных инициализирована")
 
-    # Проверяем актуальность данных в БД и рассчитываем при необходимости
-    logger.info("📡 Проверка актуальности расписания (offline-расчёт)...")
+    # Пересчитываем персональные расписания пользователей с геолокацией
+    logger.info("📡 Обновление персональных расписаний (offline-расчёт)...")
     if ensure_current_month_data():
-        logger.info("✅ Расписание актуально")
+        logger.info("✅ Персональные расписания обновлены (или пользователей пока нет)")
     else:
-        logger.warning("⚠️ Не удалось рассчитать расписание, используются существующие данные")
+        logger.warning("⚠️ Не удалось обновить персональные расписания")
 
-    # Запускаем фоновый worker проверки времени намазов (основной механизм уведомлений)
-    logger.info("🔄 Запуск фонового worker'а уведомлений...")
+    # Запускаем фоновый worker персональных уведомлений
+    logger.info("🔄 Запуск фонового worker'а персональных уведомлений...")
     await start_prayer_worker()
 
-    # Планируем уведомления на сегодня (резервный механизм через APScheduler)
-    logger.info("📅 Планирование уведомлений...")
+    # Проверяем готовность персональных расписаний
+    logger.info("📅 Проверка персональных расписаний...")
     schedule_notifications()
-
-    # Проверяем сегодняшнее расписание
-    logger.info("\n📋 Сегодняшнее расписание:\n%s", get_today_prayers())
 
     # Запускаем планировщик
     start_scheduler()

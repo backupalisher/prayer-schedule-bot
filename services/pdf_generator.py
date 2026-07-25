@@ -48,7 +48,8 @@ from reportlab.platypus import (
 )
 
 from db.database import get_connection
-from db.crud import get_by_month
+from db.crud import get_by_month, get_user_prayers_by_month
+from services.user_schedule import ensure_user_current_month
 from settings import PDF_SETTINGS
 
 logger = logging.getLogger(__name__)
@@ -90,12 +91,22 @@ USABLE_W = PAGE_W - 2 * MARGIN  # 595.28 - 80 = 515.28 pt
 USABLE_H = PAGE_H - 2 * MARGIN  # 841.89 - 80 = 761.89 pt
 
 
-def _get_prayer_data(year: int, month: int) -> List[Tuple]:
+def _get_prayer_data(
+    year: int,
+    month: int,
+    chat_id: Optional[str] = None,
+) -> List[Tuple]:
     """Получает данные о времени намазов из БД для указанного месяца."""
+    if chat_id:
+        ensure_user_current_month(chat_id)
+
     conn = get_connection()
     try:
-        rows = get_by_month(conn, year, month)
-        return rows
+        if chat_id:
+            rows = get_user_prayers_by_month(conn, chat_id, year, month)
+        else:
+            rows = get_by_month(conn, year, month)
+        return list(rows)
     except Exception as e:
         logger.error("❌ Ошибка получения данных из БД: %s", e)
         return []
@@ -142,7 +153,8 @@ def generate_pdf(
     year: int,
     month: int,
     filepath: Optional[str] = None,
-    city: str = "г. Грозный",
+    city: str = "Ваша локация",
+    chat_id: Optional[str] = None,
 ) -> Optional[str]:
     """
     Генерирует PDF-календарь намазов для указанного месяца.
@@ -154,17 +166,21 @@ def generate_pdf(
         year: Год (например, 2026)
         month: Месяц (1-12)
         filepath: Путь для сохранения файла.
-        city: Название города для подзаголовка.
+        city: Название города/локации для подзаголовка.
+        chat_id: Если задан — берёт персональное расписание пользователя.
 
     Returns:
         Путь к сгенерированному PDF-файлу или None при ошибке.
     """
-    logger.info("📄 Начало генерации PDF для %d-%02d", year, month)
+    logger.info(
+        "📄 Начало генерации PDF для %d-%02d (chat_id=%s)",
+        year, month, chat_id,
+    )
 
     font_name = _register_fonts()
 
     # Получаем данные из БД
-    prayer_data = _get_prayer_data(year, month)
+    prayer_data = _get_prayer_data(year, month, chat_id=chat_id)
 
     # Строим словарь: date_str -> {fajr, shurooq, dhuhr, asr, maghrib, isha}
     prayer_map = {}
@@ -422,7 +438,8 @@ async def async_generate_pdf(
     year: int,
     month: int,
     filepath: Optional[str] = None,
-    city: str = "г. Москва",
+    city: str = "Ваша локация",
+    chat_id: Optional[str] = None,
 ) -> Optional[str]:
     """
     Асинхронная версия generate_pdf().
@@ -430,7 +447,8 @@ async def async_generate_pdf(
     """
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
-        None, generate_pdf, year, month, filepath, city,
+        None,
+        lambda: generate_pdf(year, month, filepath, city, chat_id),
     )
 
 

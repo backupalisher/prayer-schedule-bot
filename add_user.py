@@ -37,12 +37,14 @@ def add_user(chat_id, username=None, first_name=None, last_name=None):
         
         if existing_user:
             print(f"⚠️ Пользователь с chat_id={chat_id_str} уже существует в БД:")
-            print(f"   ID: {existing_user[0]}")
-            print(f"   Username: {existing_user[2]}")
-            print(f"   Имя: {existing_user[3]}")
-            print(f"   Фамилия: {existing_user[4]}")
-            print(f"   Подписка: {'активна' if existing_user[5] else 'неактивна'}")
-            print(f"   Создан: {existing_user[6]}")
+            print(f"   ID: {existing_user['id']}")
+            print(f"   Username: {existing_user['username']}")
+            print(f"   Имя: {existing_user['first_name']}")
+            print(f"   Фамилия: {existing_user['last_name']}")
+            print(f"   Подписка: {'активна' if existing_user['subscribed'] else 'неактивна'}")
+            print(f"   Создан: {existing_user['created_at']}")
+            print(f"   TZ: {existing_user['timezone']}")
+            print(f"   Координаты: {existing_user['latitude']}, {existing_user['longitude']}")
             
             # Спросим, обновить ли данные
             response = input("Обновить данные пользователя? (y/N): ").strip().lower()
@@ -82,14 +84,17 @@ def list_users():
         print(f"📋 Найдено {len(users)} пользователей:")
         print("-" * 80)
         for user in users:
-            print(f"ID: {user[0]}")
-            print(f"  chat_id: {user[1]}")
-            print(f"  username: {user[2] or 'не указан'}")
-            print(f"  имя: {user[3] or 'не указано'}")
-            print(f"  фамилия: {user[4] or 'не указана'}")
-            print(f"  подписка: {'✅ активна' if user[5] else '❌ неактивна'}")
-            print(f"  создан: {user[6]}")
-            print(f"  обновлен: {user[7]}")
+            print(f"ID: {user['id']}")
+            print(f"  chat_id: {user['chat_id']}")
+            print(f"  username: {user['username'] or 'не указан'}")
+            print(f"  имя: {user['first_name'] or 'не указано'}")
+            print(f"  фамилия: {user['last_name'] or 'не указана'}")
+            print(f"  подписка: {'✅ активна' if user['subscribed'] else '❌ неактивна'}")
+            print(f"  timezone: {user['timezone'] or 'не задан'}")
+            print(f"  coords: {user['latitude']}, {user['longitude']}")
+            print(f"  method: {user['calculation_method']}")
+            print(f"  создан: {user['created_at']}")
+            print(f"  обновлен: {user['updated_at']}")
             print("-" * 80)
             
     except Exception as e:
