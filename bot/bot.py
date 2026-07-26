@@ -1,42 +1,86 @@
 from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message, BotCommand, ErrorEvent
+from aiogram.types import (
+    Message,
+    BotCommand,
+    ErrorEvent,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardRemove,
+    FSInputFile,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    CallbackQuery,
+)
 from aiogram.filters import Command
-from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest, TelegramConflictError
+from aiogram.exceptions import TelegramForbiddenError, TelegramConflictError
 import asyncio
 import threading
 import os
-import sys
 import logging
 from datetime import datetime
-import pytz
-
-MOSCOW_TZ = pytz.timezone('Europe/Moscow')
+from zoneinfo import ZoneInfo
 
 from settings import BOT_TOKEN, CHAT_ID
 from services.notifier import get_today_prayers, get_next_prayer
-from services.pdf_generator import generate_pdf, async_generate_pdf
+from services.pdf_generator import async_generate_pdf
+from services.madhab import (
+    MADHAB_META,
+    MADHAB_ORDER,
+    madhab_label,
+    resolve_user_madhab,
+)
+from services.user_schedule import (
+    save_location_and_recalculate,
+    set_madhab_and_recalculate,
+    madhab_label_for_user,
+)
 from db.database import get_connection
-from db.crud import insert_or_update_user, update_user_subscription, delete_user
+from db.crud import (
+    insert_or_update_user,
+    update_user_subscription,
+    get_user_by_chat_id,
+    user_has_location,
+)
 
-from aiogram.types import FSInputFile
-
-# Названия месяцев для подписей
 MONTH_NAMES = [
     "", "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
     "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь",
 ]
 
-# Настройка логирования
 logger = logging.getLogger(__name__)
 
-# Используем потокобезопасную инициализацию бота
 _bot_instance = None
 _bot_lock = threading.Lock()
 dp = Dispatcher()
 
 
+def location_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="📍 Отправить локацию", request_location=True)]],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
+
+
+def madhab_settings_keyboard(current_madhab: str) -> InlineKeyboardMarkup:
+    """Клавиатура выбора мазхаба для Аср (все 4 школы)."""
+    rows: list[list[InlineKeyboardButton]] = []
+    for code in MADHAB_ORDER:
+        meta = MADHAB_META[code]
+        mark = "✅ " if code == current_madhab else ""
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{mark}{meta['label']} ({meta['asr_rule']})",
+                    callback_data=f"madhab:{code}",
+                )
+            ]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def init_bot():
-    """Инициализирует бота (потокобезопасно)"""
+    """Инициализирует бота (потокобезопасно)."""
     global _bot_instance
 
     if not BOT_TOKEN:
@@ -46,48 +90,52 @@ def init_bot():
         if _bot_instance is None:
             _bot_instance = Bot(token=BOT_TOKEN)
             logger.info("✅ Бот инициализирован")
-    
+
     return _bot_instance
 
 
 def get_bot():
-    """Возвращает экземпляр бота (создает при необходимости)"""
+    """Возвращает экземпляр бота (создает при необходимости)."""
     if _bot_instance is None:
         return init_bot()
     return _bot_instance
 
 
-async def save_user_info(message: Message):
-    """Сохраняет информацию о пользователе в БД"""
+async def save_user_info(message: Message) -> None:
+    """Сохраняет базовую информацию о пользователе в БД."""
     try:
         conn = get_connection()
-        chat_id = message.chat.id
-        username = message.from_user.username
-        first_name = message.from_user.first_name
-        last_name = message.from_user.last_name
-        
-        success = insert_or_update_user(conn, chat_id, username, first_name, last_name)
-        conn.close()
-        
+        try:
+            success = insert_or_update_user(
+                conn,
+                message.chat.id,
+                message.from_user.username,
+                message.from_user.first_name,
+                message.from_user.last_name,
+            )
+        finally:
+            conn.close()
+
         if success:
-            logger.info("✅ Пользователь %s сохранен в БД", chat_id)
+            logger.info("✅ Пользователь %s сохранен в БД", message.chat.id)
         else:
-            logger.warning("⚠️ Не удалось сохранить пользователя %s", chat_id)
+            logger.warning("⚠️ Не удалось сохранить пользователя %s", message.chat.id)
     except Exception as e:
         logger.error("❌ Ошибка при сохранении пользователя: %s", e)
 
 
-async def handle_forbidden_error(chat_id: int, context: str = ""):
-    """
-    Обрабатывает ошибку TelegramForbiddenError.
-    Удаляет пользователя из БД, если бот был заблокирован или кикнут.
-    """
-    logger.warning("🚫 Бот заблокирован пользователем %s или кикнут из чата (%s)", chat_id, context)
+async def handle_forbidden_error(chat_id: int, context: str = "") -> None:
+    """Деактивирует пользователя при блокировке бота."""
+    logger.warning(
+        "🚫 Бот заблокирован пользователем %s или кикнут из чата (%s)",
+        chat_id, context,
+    )
     try:
         conn = get_connection()
-        # Отписываем пользователя (удаляем или деактивируем)
-        update_user_subscription(conn, chat_id, 0)
-        conn.close()
+        try:
+            update_user_subscription(conn, chat_id, 0)
+        finally:
+            conn.close()
         logger.info("✅ Пользователь %s деактивирован (подписка отключена)", chat_id)
     except Exception as e:
         logger.error("❌ Ошибка при деактивации пользователя %s: %s", chat_id, e)
@@ -95,48 +143,45 @@ async def handle_forbidden_error(chat_id: int, context: str = ""):
 
 @dp.errors()
 async def errors_handler(event: ErrorEvent):
-    """
-    Глобальный обработчик ошибок aiogram.
-    Предотвращает падение бота при любых исключениях.
-    """
+    """Глобальный обработчик ошибок aiogram."""
     exception = event.exception
     update = event.update
-    
+
     logger.error("⚠️ Глобальная ошибка: %s: %s", type(exception).__name__, exception)
-    
-    # Обработка Forbidden (бот заблокирован/кикнут)
+
     if isinstance(exception, TelegramForbiddenError):
-        # Пытаемся извлечь chat_id из update
         chat_id = None
         if update and update.message:
             chat_id = update.message.chat.id
-        elif update and update.callback_query:
+        elif update and update.callback_query and update.callback_query.message:
             chat_id = update.callback_query.message.chat.id
-        
+
         if chat_id:
             await handle_forbidden_error(chat_id, "global_handler")
-    
-    # Возвращаем True, чтобы предотвратить всплытие исключения
+
     return True
 
 
 @dp.message(Command("start"))
 async def start_handler(message: Message):
-    """Обработчик команды /start"""
+    """Обработчик команды /start."""
     try:
-        # Сохраняем пользователя в БД
         await save_user_info(message)
-        
         await message.answer(
             "🕌 <b>Ассаламу алейкум!</b>\n\n"
-            "Я бот расписания намазов.\n\n"
-            "📋 <b>Доступные команды:</b>\n"
-            "/today - расписание на сегодня\n"
-            "/next - следующий намаз\n"
-            "/pdf - скачать PDF расписание\n"
-            "/help - помощь\n\n"
-            "<i>Ваш chat_id автоматически сохранен для получения уведомлений</i>",
-            parse_mode="HTML"
+            "Я бот независимого расчёта времени намаза для любой точки мира.\n\n"
+            "📍 Для начала отправьте вашу геолокацию — "
+            "бот определит часовой пояс, выберет местный метод расчёта "
+            "и сохранит персональное расписание.\n\n"
+            "📋 <b>Команды:</b>\n"
+            "/location — обновить геолокацию\n"
+            "/settings — мазхаб Аср (4 школы)\n"
+            "/today — расписание на сегодня\n"
+            "/next — следующий намаз\n"
+            "/pdf — PDF расписание на месяц\n"
+            "/help — помощь",
+            parse_mode="HTML",
+            reply_markup=location_keyboard(),
         )
     except TelegramForbiddenError:
         await handle_forbidden_error(message.chat.id, "start_handler")
@@ -144,20 +189,174 @@ async def start_handler(message: Message):
         logger.error("❌ Ошибка в start_handler: %s", e)
 
 
+@dp.message(Command("location"))
+async def location_cmd_handler(message: Message):
+    """Запрашивает обновление геолокации."""
+    try:
+        await save_user_info(message)
+        await message.answer(
+            "📍 Отправьте текущую геолокацию для пересчёта времени намаза.",
+            reply_markup=location_keyboard(),
+        )
+    except TelegramForbiddenError:
+        await handle_forbidden_error(message.chat.id, "location_cmd_handler")
+    except Exception as e:
+        logger.error("❌ Ошибка в location_cmd_handler: %s", e)
+
+
+@dp.message(F.location)
+async def location_handler(message: Message):
+    """Принимает геолокацию, сохраняет настройки и пересчитывает намазы."""
+    try:
+        lat = message.location.latitude
+        lon = message.location.longitude
+
+        ok, tz_name, profile, today_times = save_location_and_recalculate(
+            chat_id=message.chat.id,
+            latitude=lat,
+            longitude=lon,
+            username=message.from_user.username if message.from_user else None,
+            first_name=message.from_user.first_name if message.from_user else None,
+            last_name=message.from_user.last_name if message.from_user else None,
+        )
+
+        if not ok or not tz_name or not profile or not today_times:
+            await message.answer(
+                "❌ Не удалось определить часовой пояс или рассчитать намазы.\n"
+                "Попробуйте отправить локацию ещё раз.",
+                reply_markup=location_keyboard(),
+            )
+            return
+
+        conn = get_connection()
+        try:
+            user = get_user_by_chat_id(conn, message.chat.id)
+            madhab = madhab_label_for_user(user)
+        finally:
+            conn.close()
+
+        text = (
+            f"✅ <b>Локация сохранена, расписание пересчитано</b>\n\n"
+            f"🌍 Часовой пояс: <code>{tz_name}</code>\n"
+            f"📍 Координаты: <code>{lat:.4f}, {lon:.4f}</code>\n"
+            f"🧭 Метод: {profile.label}\n"
+            f"📚 Мазхаб Аср: {madhab}\n\n"
+            f"📅 <b>Намазы на сегодня:</b>\n"
+            f"🌅 Фаджр: {today_times['Fajr']}\n"
+            f"🌄 Шурук: {today_times['Sunrise']}\n"
+            f"☀️ Зухр: {today_times['Dhuhr']}\n"
+            f"🏜️ Аср: {today_times['Asr']}\n"
+            f"🌇 Магриб: {today_times['Maghrib']}\n"
+            f"🌙 Иша: {today_times['Isha']}\n\n"
+            f"<i>Мазхаб можно сменить в /settings</i>"
+        )
+        await message.answer(
+            text,
+            parse_mode="HTML",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+    except TelegramForbiddenError:
+        await handle_forbidden_error(message.chat.id, "location_handler")
+    except Exception as e:
+        logger.error("❌ Ошибка в location_handler: %s", e)
+        await message.answer("❌ Ошибка при обработке геолокации. Попробуйте ещё раз.")
+
+
+@dp.message(Command("settings"))
+async def settings_handler(message: Message):
+    """Настройки пользователя: переключение мазхаба Аср."""
+    try:
+        await save_user_info(message)
+        conn = get_connection()
+        try:
+            user = get_user_by_chat_id(conn, message.chat.id)
+        finally:
+            conn.close()
+
+        if not user_has_location(user):
+            await message.answer(
+                "📍 Сначала отправьте геолокацию командой /location",
+                reply_markup=location_keyboard(),
+            )
+            return
+
+        current = resolve_user_madhab(user)
+        await message.answer(
+            "⚙️ <b>Настройки расчёта</b>\n\n"
+            f"📍 Координаты: <code>{user['latitude']:.4f}, {user['longitude']:.4f}</code>\n"
+            f"🌍 Часовой пояс: <code>{user['timezone']}</code>\n"
+            f"🧭 Метод: <code>{user['calculation_method']}</code>\n"
+            f"📚 Мазхаб Аср: <b>{madhab_label_for_user(user)}</b>\n\n"
+            "Выберите мазхаб для молитвы Аср:\n"
+            "• <b>Ханафитский</b> — тень × 2\n"
+            "• <b>Маликитский / Шафиитский / Ханбалитский</b> — тень × 1\n\n"
+            "Расчёт остаётся астрономическим по вашему GPS.",
+            parse_mode="HTML",
+            reply_markup=madhab_settings_keyboard(current),
+        )
+    except TelegramForbiddenError:
+        await handle_forbidden_error(message.chat.id, "settings_handler")
+    except Exception as e:
+        logger.error("❌ Ошибка в settings_handler: %s", e)
+
+
+@dp.callback_query(F.data.startswith("madhab:"))
+async def madhab_callback_handler(callback: CallbackQuery):
+    """Переключает мазхаб Аср и пересчитывает расписание."""
+    try:
+        madhab_code = (callback.data or "").split(":", 1)[-1]
+        if madhab_code not in MADHAB_META:
+            await callback.answer("Неизвестный мазхаб", show_alert=True)
+            return
+
+        chat_id = callback.message.chat.id if callback.message else callback.from_user.id
+        ok, today_times, label = set_madhab_and_recalculate(chat_id, madhab_code)
+        if not ok or not today_times:
+            await callback.answer("Сначала отправьте геолокацию (/location)", show_alert=True)
+            return
+
+        text = (
+            f"✅ Мазхаб Аср: <b>{label}</b>\n"
+            f"Расписание пересчитано по вашему GPS.\n\n"
+            f"📅 <b>Намазы на сегодня:</b>\n"
+            f"🌅 Фаджр: {today_times['Fajr']}\n"
+            f"🌄 Шурук: {today_times['Sunrise']}\n"
+            f"☀️ Зухр: {today_times['Dhuhr']}\n"
+            f"🏜️ Аср: {today_times['Asr']}\n"
+            f"🌇 Магриб: {today_times['Maghrib']}\n"
+            f"🌙 Иша: {today_times['Isha']}"
+        )
+        if callback.message:
+            await callback.message.edit_text(
+                text,
+                parse_mode="HTML",
+                reply_markup=madhab_settings_keyboard(madhab_code),
+            )
+        await callback.answer(f"Выбрано: {madhab_label(madhab_code, detailed=False)}")
+    except TelegramForbiddenError:
+        chat_id = callback.message.chat.id if callback.message else callback.from_user.id
+        await handle_forbidden_error(chat_id, "madhab_callback_handler")
+    except Exception as e:
+        logger.error("❌ Ошибка в madhab_callback_handler: %s", e)
+        await callback.answer("Ошибка при смене мазхаба", show_alert=True)
+
+
 @dp.message(Command("help"))
 async def help_handler(message: Message):
-    """Обработчик команды /help"""
+    """Обработчик команды /help."""
     try:
-        # Сохраняем пользователя в БД
         await save_user_info(message)
-        
         await message.answer(
             "🕌 <b>Помощь по командам:</b>\n\n"
-            "/today - показывает время намазов на сегодня\n"
-            "/next - показывает следующий намаз\n"
-            "/pdf - генерирует и отправляет PDF файл с расписанием на месяц\n\n"
-            "<i>Бот автоматически присылает уведомления о времени намазов</i>",
-            parse_mode="HTML"
+            "/location — отправить/обновить геолокацию\n"
+            "/settings — мазхаб Аср: ханафи / малики / шафии / ханбали\n"
+            "/today — персональное время намазов на сегодня\n"
+            "/next — следующий намаз по вашему часовому поясу\n"
+            "/pdf — PDF с расписанием на месяц для вашей локации\n\n"
+            "<i>Уведомления приходят индивидуально, по вашему местному времени.</i>\n"
+            "<i>Метод расчёта подбирается автоматически по локации; "
+            "мазхаб Аср (4 школы) — в /settings.</i>",
+            parse_mode="HTML",
         )
     except TelegramForbiddenError:
         await handle_forbidden_error(message.chat.id, "help_handler")
@@ -167,13 +366,12 @@ async def help_handler(message: Message):
 
 @dp.message(Command("today"))
 async def today_handler(message: Message):
-    """Обработчик команды /today"""
+    """Обработчик команды /today."""
     try:
-        # Сохраняем пользователя в БД
         await save_user_info(message)
-        
-        text = get_today_prayers()
-        await message.answer(text, parse_mode="HTML")
+        text = get_today_prayers(message.chat.id)
+        markup = location_keyboard() if "геолокацию" in text.lower() else None
+        await message.answer(text, parse_mode="HTML", reply_markup=markup)
     except TelegramForbiddenError:
         await handle_forbidden_error(message.chat.id, "today_handler")
     except Exception as e:
@@ -183,37 +381,55 @@ async def today_handler(message: Message):
 @dp.message(Command("pdf"))
 async def pdf_handler(message: Message):
     try:
-        # Сохраняем пользователя в БД
         await save_user_info(message)
 
-        now = datetime.now(MOSCOW_TZ)
+        conn = get_connection()
+        try:
+            user = get_user_by_chat_id(conn, message.chat.id)
+        finally:
+            conn.close()
+
+        if not user_has_location(user):
+            await message.answer(
+                "📍 Сначала отправьте геолокацию командой /location",
+                reply_markup=location_keyboard(),
+            )
+            return
+
+        tz = ZoneInfo(user["timezone"])
+        now = datetime.now(tz)
         year = now.year
         month = now.month
+        city = f"{user['latitude']:.2f}, {user['longitude']:.2f} ({user['timezone']})"
 
-        await message.answer("📄 Генерирую PDF файл с расписанием...")
+        await message.answer("📄 Генерирую PDF файл с вашим расписанием...")
 
-        pdf_file = await async_generate_pdf(year, month)
+        pdf_file = await async_generate_pdf(
+            year,
+            month,
+            city=city,
+            chat_id=str(message.chat.id),
+        )
 
         if pdf_file:
             file = FSInputFile(pdf_file)
-
             try:
                 await message.answer_document(
                     document=file,
-                    caption=f"📊 Расписание намазов на {MONTH_NAMES[month]} {year}"
+                    caption=f"📊 Расписание намазов на {MONTH_NAMES[month]} {year}",
                 )
-                # Удаляем файл после успешной отправки
                 os.remove(pdf_file)
                 logger.info("PDF файл %s удалён после отправки", pdf_file)
             except TelegramForbiddenError:
                 await handle_forbidden_error(message.chat.id, "pdf_handler")
-                # Не удаляем файл, т.к. отправка не удалась
             except Exception as e:
                 logger.error("Ошибка отправки PDF: %s", e)
-                # Оставляем файл для отладки
                 raise
         else:
-            await message.answer("❌ Не удалось сгенерировать PDF. Возможно, нет данных для текущего месяца.")
+            await message.answer(
+                "❌ Не удалось сгенерировать PDF. "
+                "Обновите локацию через /location и попробуйте снова."
+            )
     except TelegramForbiddenError:
         await handle_forbidden_error(message.chat.id, "pdf_handler_outer")
     except Exception as e:
@@ -223,11 +439,10 @@ async def pdf_handler(message: Message):
 @dp.message(Command("next"))
 async def next_handler(message: Message):
     try:
-        # Сохраняем пользователя в БД
         await save_user_info(message)
-        
-        text = get_next_prayer()
-        await message.answer(text, parse_mode="HTML")
+        text = get_next_prayer(message.chat.id)
+        markup = location_keyboard() if "геолокацию" in text.lower() else None
+        await message.answer(text, parse_mode="HTML", reply_markup=markup)
     except TelegramForbiddenError:
         await handle_forbidden_error(message.chat.id, "next_handler")
     except Exception as e:
@@ -236,7 +451,7 @@ async def next_handler(message: Message):
 
 @dp.message()
 async def debug_handler(message: Message):
-    """Обработчик всех остальных сообщений"""
+    """Обработчик всех остальных сообщений."""
     try:
         logger.info("📨 Получено сообщение от %s: %s", message.chat.id, message.text)
         await message.answer(
@@ -250,7 +465,7 @@ async def debug_handler(message: Message):
 
 
 async def send_message(text: str):
-    """Отправляет сообщение в указанный чат"""
+    """Отправляет сообщение в указанный чат."""
     if not BOT_TOKEN:
         raise ValueError("❌ BOT_TOKEN не найден в .env")
 
@@ -274,6 +489,8 @@ async def set_commands():
 
     commands = [
         BotCommand(command="start", description="Запустить бота"),
+        BotCommand(command="location", description="Обновить геолокацию"),
+        BotCommand(command="settings", description="Мазхаб Аср (4 школы)"),
         BotCommand(command="today", description="Сегодня"),
         BotCommand(command="next", description="Следующий намаз"),
         BotCommand(command="pdf", description="Скачать PDF"),
@@ -323,7 +540,7 @@ async def start_bot():
                 conflict_retries += 1
                 logger.error(
                     "🚫 TelegramConflictError: %s. Попытка %s/%s.",
-                    e, conflict_retries, max_conflict_retries
+                    e, conflict_retries, max_conflict_retries,
                 )
                 if conflict_retries >= max_conflict_retries:
                     logger.critical(
@@ -340,7 +557,7 @@ async def start_bot():
                 delay = min(60, 5 * polling_retries)
                 logger.error(
                     "❌ Ошибка polling (%s/%s): %s: %s. Перезапуск через %s сек...",
-                    polling_retries, max_polling_retries, type(e).__name__, e, delay
+                    polling_retries, max_polling_retries, type(e).__name__, e, delay,
                 )
                 await asyncio.sleep(delay)
                 break
