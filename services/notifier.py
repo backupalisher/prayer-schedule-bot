@@ -154,8 +154,10 @@ def get_today_prayers(chat_id: Optional[str | int] = None) -> str:
             return NO_LOCATION_TEXT
 
         tz_name = user["timezone"]
+        from services.madhab import madhab_label, resolve_user_madhab
+
         method = user["calculation_method"] or "auto"
-        madhab = "Ханафи" if bool(user["use_hanafi"]) else "Шафии"
+        madhab = madhab_label(resolve_user_madhab(user), detailed=False)
         tz = ZoneInfo(tz_name)
         today = datetime.now(tz).strftime("%Y-%m-%d")
         row = get_user_prayers_by_date(conn, chat_id, today)

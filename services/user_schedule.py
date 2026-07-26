@@ -20,6 +20,7 @@ from db.crud import (
     user_has_location,
 )
 from db.database import get_connection
+from services.madhab import madhab_label, resolve_user_madhab
 from services.prayer_calculator import (
     CalculationProfile,
     detect_calculation_profile,
@@ -57,10 +58,10 @@ def save_location_and_recalculate(
     try:
         existing = get_user_by_chat_id(conn, chat_id)
         preserve_madhab = bool(existing and existing["madhab_manual"])
-        use_hanafi = (
-            bool(existing["use_hanafi"])
+        madhab = (
+            resolve_user_madhab(existing)
             if preserve_madhab
-            else profile.use_hanafi
+            else profile.default_madhab
         )
 
         saved = update_user_location(
@@ -70,7 +71,7 @@ def save_location_and_recalculate(
             longitude=longitude,
             timezone=tz_name,
             calculation_method=profile.method,
-            use_hanafi=use_hanafi,
+            madhab=madhab,
             fajr_angle=profile.fajr_angle,
             isha_angle=profile.isha_angle,
             username=username,
@@ -105,7 +106,7 @@ def save_location_and_recalculate(
 
 def set_madhab_and_recalculate(
     chat_id: str | int,
-    use_hanafi: bool,
+    madhab: str,
 ) -> tuple[bool, Optional[dict[str, str]], Optional[str]]:
     """
     Меняет мазхаб Аср и пересчитывает персональное расписание.
@@ -113,19 +114,19 @@ def set_madhab_and_recalculate(
     Returns:
         (ok, today_times, madhab_label)
     """
-    madhab_label = "Ханафи (тень × 2)" if use_hanafi else "Шафии (тень × 1)"
+    label = madhab_label(madhab, detailed=True)
     conn = get_connection()
     try:
         user = get_user_by_chat_id(conn, chat_id)
         if not user_has_location(user):
-            return False, None, madhab_label
+            return False, None, label
 
-        if not update_user_madhab(conn, chat_id, use_hanafi):
-            return False, None, madhab_label
+        if not update_user_madhab(conn, chat_id, madhab):
+            return False, None, label
 
         user = get_user_by_chat_id(conn, chat_id)
         if not recalculate_user_schedule(conn, user, months_ahead=1):
-            return False, None, madhab_label
+            return False, None, label
 
         local_today = _user_local_now(user["timezone"]).strftime("%Y-%m-%d")
         row = get_user_prayers_by_date(conn, chat_id, local_today)
@@ -139,7 +140,7 @@ def set_madhab_and_recalculate(
                 "Maghrib": row["maghrib"],
                 "Isha": row["isha"],
             }
-        return True, today_times, madhab_label
+        return True, today_times, label
     finally:
         conn.close()
 
@@ -148,7 +149,7 @@ def madhab_label_for_user(user: Any) -> str:
     """Человекочитаемая подпись текущего мазхаба пользователя."""
     if user is None:
         return "не задан"
-    return "Ханафи (тень × 2)" if bool(user["use_hanafi"]) else "Шафии (тень × 1)"
+    return madhab_label(resolve_user_madhab(user), detailed=True)
 
 
 def recalculate_user_schedule(
@@ -167,7 +168,7 @@ def recalculate_user_schedule(
     lon = float(user["longitude"])
     tz_name = str(user["timezone"])
     method = str(user["calculation_method"] or "dum_rf")
-    use_hanafi = bool(user["use_hanafi"])
+    madhab = resolve_user_madhab(user)
     fajr_angle = float(user["fajr_angle"] if user["fajr_angle"] is not None else 16.0)
     isha_angle = float(user["isha_angle"] if user["isha_angle"] is not None else 15.0)
 
@@ -191,17 +192,18 @@ def recalculate_user_schedule(
             lon=lon,
             tz_name=tz_name,
             method=method,
-            use_hanafi=use_hanafi,
+            madhab=madhab,
             fajr_angle=fajr_angle,
             isha_angle=isha_angle,
         )
         total_saved += saved
 
     logger.info(
-        "✅ Пересчёт для chat_id=%s: сохранено %s дней (method=%s, tz=%s)",
+        "✅ Пересчёт для chat_id=%s: сохранено %s дней (method=%s, madhab=%s, tz=%s)",
         user["chat_id"],
         total_saved,
         method,
+        madhab,
         tz_name,
     )
     return total_saved > 0
@@ -216,7 +218,7 @@ def _calculate_month_for_user(
     lon: float,
     tz_name: str,
     method: str,
-    use_hanafi: bool,
+    madhab: str,
     fajr_angle: float,
     isha_angle: float,
 ) -> int:
@@ -230,7 +232,7 @@ def _calculate_month_for_user(
                 lon=lon,
                 tz_name=tz_name,
                 target_date=target,
-                use_hanafi=use_hanafi,
+                madhab=madhab,
                 fajr_angle=fajr_angle,
                 isha_angle=isha_angle,
                 method=method,

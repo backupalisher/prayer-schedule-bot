@@ -18,9 +18,16 @@ from zoneinfo import ZoneInfo
 from adhanpy.calculation.CalculationMethod import CalculationMethod
 from adhanpy.calculation.CalculationParameters import CalculationParameters
 from adhanpy.calculation.HighLatitudeRule import HighLatitudeRule
-from adhanpy.calculation.Madhab import Madhab
 from adhanpy.PrayerTimes import PrayerTimes
 from timezonefinder import TimezoneFinder
+
+from services.madhab import (
+    MADHAB_HANAFI,
+    MADHAB_SHAFI,
+    madhab_to_adhan,
+    madhab_uses_hanafi_asr,
+    normalize_madhab,
+)
 
 _tf = TimezoneFinder()
 
@@ -79,10 +86,15 @@ class CalculationProfile:
     """Профиль расчёта намаза для локации пользователя."""
 
     method: str
-    use_hanafi: bool
+    default_madhab: str
     fajr_angle: float
     isha_angle: float
     label: str
+
+    @property
+    def use_hanafi(self) -> bool:
+        """Обратная совместимость: ханафитское правило Аср."""
+        return madhab_uses_hanafi_asr(self.default_madhab)
 
 
 def get_timezone_by_coordinates(lat: float, lon: float) -> Optional[str]:
@@ -107,7 +119,7 @@ def detect_calculation_profile(
     if _is_saudi_arabia(lat, lon, tz_name):
         return CalculationProfile(
             method="umm_al_qura",
-            use_hanafi=False,
+            default_madhab=MADHAB_SHAFI,
             fajr_angle=18.5,
             isha_angle=0.0,
             label="Umm al-Qura (Саудовская Аравия)",
@@ -118,7 +130,7 @@ def detect_calculation_profile(
     ):
         return CalculationProfile(
             method="egyptian",
-            use_hanafi=False,
+            default_madhab=MADHAB_SHAFI,
             fajr_angle=19.5,
             isha_angle=17.5,
             label="Egyptian General Authority",
@@ -127,15 +139,15 @@ def detect_calculation_profile(
     if tz_name in RUSSIA_TIMEZONES or tz_name in CIS_TIMEZONES:
         return CalculationProfile(
             method="dum_rf",
-            use_hanafi=True,
+            default_madhab=MADHAB_HANAFI,
             fajr_angle=16.0,
             isha_angle=15.0,
-            label="ДУМ РФ (16°/15°, Ханафи)",
+            label="ДУМ РФ (16°/15°)",
         )
 
     return CalculationProfile(
         method="muslim_world_league",
-        use_hanafi=False,
+        default_madhab=MADHAB_SHAFI,
         fajr_angle=18.0,
         isha_angle=17.0,
         label="Muslim World League",
@@ -144,7 +156,7 @@ def detect_calculation_profile(
 
 def _build_parameters(
     method: str,
-    use_hanafi: bool,
+    madhab: str,
     fajr_angle: float,
     isha_angle: float,
 ) -> CalculationParameters:
@@ -167,7 +179,7 @@ def _build_parameters(
         # dum_rf / custom — явные углы
         params = CalculationParameters(fajr_angle=fajr_angle, isha_angle=isha_angle)
 
-    params.madhab = Madhab.HANAFI if use_hanafi else Madhab.SHAFI
+    params.madhab = madhab_to_adhan(madhab)
     params.high_latitude_rule = HighLatitudeRule.TWILIGHT_ANGLE
     return params
 
@@ -181,6 +193,7 @@ def get_prayer_times(
     fajr_angle: float = 16.0,
     isha_angle: float = 15.0,
     method: str = "dum_rf",
+    madhab: Optional[str] = None,
 ) -> dict[str, str]:
     """
     Рассчитывает местное время намаза для координат и даты.
@@ -196,7 +209,8 @@ def get_prayer_times(
     except Exception as exc:
         raise ValueError(f"Некорректный часовой пояс: {tz_name}") from exc
 
-    params = _build_parameters(method, use_hanafi, fajr_angle, isha_angle)
+    resolved_madhab = normalize_madhab(madhab, use_hanafi_fallback=use_hanafi)
+    params = _build_parameters(method, resolved_madhab, fajr_angle, isha_angle)
     prayer_date = datetime(
         target_date.year,
         target_date.month,

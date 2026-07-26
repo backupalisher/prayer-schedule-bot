@@ -23,6 +23,12 @@ from zoneinfo import ZoneInfo
 from settings import BOT_TOKEN, CHAT_ID
 from services.notifier import get_today_prayers, get_next_prayer
 from services.pdf_generator import async_generate_pdf
+from services.madhab import (
+    MADHAB_META,
+    MADHAB_ORDER,
+    madhab_label,
+    resolve_user_madhab,
+)
 from services.user_schedule import (
     save_location_and_recalculate,
     set_madhab_and_recalculate,
@@ -56,26 +62,21 @@ def location_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
-def madhab_settings_keyboard(use_hanafi: bool) -> InlineKeyboardMarkup:
-    """Клавиатура выбора мазхаба для Аср."""
-    hanafi_mark = "✅ " if use_hanafi else ""
-    shafi_mark = "✅ " if not use_hanafi else ""
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+def madhab_settings_keyboard(current_madhab: str) -> InlineKeyboardMarkup:
+    """Клавиатура выбора мазхаба для Аср (все 4 школы)."""
+    rows: list[list[InlineKeyboardButton]] = []
+    for code in MADHAB_ORDER:
+        meta = MADHAB_META[code]
+        mark = "✅ " if code == current_madhab else ""
+        rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"{hanafi_mark}Ханафи (тень × 2)",
-                    callback_data="madhab:hanafi",
+                    text=f"{mark}{meta['label']} ({meta['asr_rule']})",
+                    callback_data=f"madhab:{code}",
                 )
-            ],
-            [
-                InlineKeyboardButton(
-                    text=f"{shafi_mark}Шафии (тень × 1)",
-                    callback_data="madhab:shafi",
-                )
-            ],
-        ]
-    )
+            ]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def init_bot():
@@ -174,7 +175,7 @@ async def start_handler(message: Message):
             "и сохранит персональное расписание.\n\n"
             "📋 <b>Команды:</b>\n"
             "/location — обновить геолокацию\n"
-            "/settings — мазхаб Аср (Ханафи/Шафии)\n"
+            "/settings — мазхаб Аср (4 школы)\n"
             "/today — расписание на сегодня\n"
             "/next — следующий намаз\n"
             "/pdf — PDF расписание на месяц\n"
@@ -279,18 +280,19 @@ async def settings_handler(message: Message):
             )
             return
 
-        use_hanafi = bool(user["use_hanafi"])
+        current = resolve_user_madhab(user)
         await message.answer(
             "⚙️ <b>Настройки расчёта</b>\n\n"
             f"📍 Координаты: <code>{user['latitude']:.4f}, {user['longitude']:.4f}</code>\n"
             f"🌍 Часовой пояс: <code>{user['timezone']}</code>\n"
             f"🧭 Метод: <code>{user['calculation_method']}</code>\n"
             f"📚 Мазхаб Аср: <b>{madhab_label_for_user(user)}</b>\n\n"
-            "Выберите мазхаб для молитвы Аср.\n"
-            "Расчёт остаётся астрономическим по вашему GPS — "
-            "меняются только правила длины тени для Аср.",
+            "Выберите мазхаб для молитвы Аср:\n"
+            "• <b>Ханафитский</b> — тень × 2\n"
+            "• <b>Маликитский / Шафиитский / Ханбалитский</b> — тень × 1\n\n"
+            "Расчёт остаётся астрономическим по вашему GPS.",
             parse_mode="HTML",
-            reply_markup=madhab_settings_keyboard(use_hanafi),
+            reply_markup=madhab_settings_keyboard(current),
         )
     except TelegramForbiddenError:
         await handle_forbidden_error(message.chat.id, "settings_handler")
@@ -298,20 +300,23 @@ async def settings_handler(message: Message):
         logger.error("❌ Ошибка в settings_handler: %s", e)
 
 
-@dp.callback_query(F.data.in_({"madhab:hanafi", "madhab:shafi"}))
+@dp.callback_query(F.data.startswith("madhab:"))
 async def madhab_callback_handler(callback: CallbackQuery):
     """Переключает мазхаб Аср и пересчитывает расписание."""
     try:
-        use_hanafi = callback.data == "madhab:hanafi"
-        chat_id = callback.message.chat.id if callback.message else callback.from_user.id
+        madhab_code = (callback.data or "").split(":", 1)[-1]
+        if madhab_code not in MADHAB_META:
+            await callback.answer("Неизвестный мазхаб", show_alert=True)
+            return
 
-        ok, today_times, madhab_label = set_madhab_and_recalculate(chat_id, use_hanafi)
+        chat_id = callback.message.chat.id if callback.message else callback.from_user.id
+        ok, today_times, label = set_madhab_and_recalculate(chat_id, madhab_code)
         if not ok or not today_times:
             await callback.answer("Сначала отправьте геолокацию (/location)", show_alert=True)
             return
 
         text = (
-            f"✅ Мазхаб Аср: <b>{madhab_label}</b>\n"
+            f"✅ Мазхаб Аср: <b>{label}</b>\n"
             f"Расписание пересчитано по вашему GPS.\n\n"
             f"📅 <b>Намазы на сегодня:</b>\n"
             f"🌅 Фаджр: {today_times['Fajr']}\n"
@@ -325,9 +330,9 @@ async def madhab_callback_handler(callback: CallbackQuery):
             await callback.message.edit_text(
                 text,
                 parse_mode="HTML",
-                reply_markup=madhab_settings_keyboard(use_hanafi),
+                reply_markup=madhab_settings_keyboard(madhab_code),
             )
-        await callback.answer(f"Выбрано: {madhab_label}")
+        await callback.answer(f"Выбрано: {madhab_label(madhab_code, detailed=False)}")
     except TelegramForbiddenError:
         chat_id = callback.message.chat.id if callback.message else callback.from_user.id
         await handle_forbidden_error(chat_id, "madhab_callback_handler")
@@ -344,13 +349,13 @@ async def help_handler(message: Message):
         await message.answer(
             "🕌 <b>Помощь по командам:</b>\n\n"
             "/location — отправить/обновить геолокацию\n"
-            "/settings — мазхаб Аср: Ханафи или Шафии\n"
+            "/settings — мазхаб Аср: ханафи / малики / шафии / ханбали\n"
             "/today — персональное время намазов на сегодня\n"
             "/next — следующий намаз по вашему часовому поясу\n"
             "/pdf — PDF с расписанием на месяц для вашей локации\n\n"
             "<i>Уведомления приходят индивидуально, по вашему местному времени.</i>\n"
             "<i>Метод расчёта подбирается автоматически по локации; "
-            "мазхаб Аср можно переключить в /settings.</i>",
+            "мазхаб Аср (4 школы) — в /settings.</i>",
             parse_mode="HTML",
         )
     except TelegramForbiddenError:
@@ -485,7 +490,7 @@ async def set_commands():
     commands = [
         BotCommand(command="start", description="Запустить бота"),
         BotCommand(command="location", description="Обновить геолокацию"),
-        BotCommand(command="settings", description="Мазхаб Аср (Ханафи/Шафии)"),
+        BotCommand(command="settings", description="Мазхаб Аср (4 школы)"),
         BotCommand(command="today", description="Сегодня"),
         BotCommand(command="next", description="Следующий намаз"),
         BotCommand(command="pdf", description="Скачать PDF"),

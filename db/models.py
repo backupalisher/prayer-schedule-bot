@@ -8,6 +8,7 @@ USER_LOCATION_COLUMNS: dict[str, str] = {
     "timezone": "TEXT",
     "calculation_method": "TEXT DEFAULT 'auto'",
     "use_hanafi": "INTEGER DEFAULT 1",
+    "madhab": "TEXT DEFAULT 'hanafi'",
     "madhab_manual": "INTEGER DEFAULT 0",
     "fajr_angle": "REAL DEFAULT 16.0",
     "isha_angle": "REAL DEFAULT 15.0",
@@ -86,6 +87,7 @@ def create_table(conn) -> None:
         timezone TEXT,
         calculation_method TEXT DEFAULT 'auto',
         use_hanafi INTEGER DEFAULT 1,
+        madhab TEXT DEFAULT 'hanafi',
         madhab_manual INTEGER DEFAULT 0,
         fajr_angle REAL DEFAULT 16.0,
         isha_angle REAL DEFAULT 15.0
@@ -93,6 +95,20 @@ def create_table(conn) -> None:
     """)
     conn.commit()
     _ensure_columns(conn, "users", USER_LOCATION_COLUMNS)
+
+    # Совместимость: заполняем madhab из use_hanafi, если пусто
+    try:
+        conn.execute("""
+            UPDATE users
+            SET madhab = CASE
+                WHEN use_hanafi = 1 THEN 'hanafi'
+                ELSE 'shafi'
+            END
+            WHERE madhab IS NULL OR madhab = ''
+        """)
+        conn.commit()
+    except Exception as exc:
+        logger.warning("⚠️ Не удалось синхронизировать madhab: %s", exc)
 
     conn.execute("""
     CREATE TABLE IF NOT EXISTS user_prayer_times (
