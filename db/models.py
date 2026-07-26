@@ -8,6 +8,7 @@ USER_LOCATION_COLUMNS: dict[str, str] = {
     "timezone": "TEXT",
     "calculation_method": "TEXT DEFAULT 'auto'",
     "use_hanafi": "INTEGER DEFAULT 1",
+    "madhab_manual": "INTEGER DEFAULT 0",
     "fajr_angle": "REAL DEFAULT 16.0",
     "isha_angle": "REAL DEFAULT 15.0",
 }
@@ -85,6 +86,7 @@ def create_table(conn) -> None:
         timezone TEXT,
         calculation_method TEXT DEFAULT 'auto',
         use_hanafi INTEGER DEFAULT 1,
+        madhab_manual INTEGER DEFAULT 0,
         fajr_angle REAL DEFAULT 16.0,
         isha_angle REAL DEFAULT 15.0
     )

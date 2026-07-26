@@ -155,6 +155,7 @@ def get_today_prayers(chat_id: Optional[str | int] = None) -> str:
 
         tz_name = user["timezone"]
         method = user["calculation_method"] or "auto"
+        madhab = "Ханафи" if bool(user["use_hanafi"]) else "Шафии"
         tz = ZoneInfo(tz_name)
         today = datetime.now(tz).strftime("%Y-%m-%d")
         row = get_user_prayers_by_date(conn, chat_id, today)
@@ -175,7 +176,8 @@ def get_today_prayers(chat_id: Optional[str | int] = None) -> str:
     return (
         f"🕌 <b>Намазы на сегодня</b>\n"
         f"📅 {today} ({tz_name})\n"
-        f"🧭 Метод: <code>{method}</code>\n\n"
+        f"🧭 Метод: <code>{method}</code>\n"
+        f"📚 Мазхаб Аср: {madhab}\n\n"
         f"🌅 Фаджр: {row['fajr']}\n"
         f"🌄 Шурук: {row['shurooq'] or '—'}\n"
         f"☀️ Зухр: {row['dhuhr']}\n"

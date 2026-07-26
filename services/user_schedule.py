@@ -16,6 +16,7 @@ from db.crud import (
     get_users_with_location,
     upsert_user_prayer,
     update_user_location,
+    update_user_madhab,
     user_has_location,
 )
 from db.database import get_connection
@@ -54,6 +55,14 @@ def save_location_and_recalculate(
     profile = detect_calculation_profile(latitude, longitude, tz_name)
     conn = get_connection()
     try:
+        existing = get_user_by_chat_id(conn, chat_id)
+        preserve_madhab = bool(existing and existing["madhab_manual"])
+        use_hanafi = (
+            bool(existing["use_hanafi"])
+            if preserve_madhab
+            else profile.use_hanafi
+        )
+
         saved = update_user_location(
             conn,
             chat_id=chat_id,
@@ -61,12 +70,13 @@ def save_location_and_recalculate(
             longitude=longitude,
             timezone=tz_name,
             calculation_method=profile.method,
-            use_hanafi=profile.use_hanafi,
+            use_hanafi=use_hanafi,
             fajr_angle=profile.fajr_angle,
             isha_angle=profile.isha_angle,
             username=username,
             first_name=first_name,
             last_name=last_name,
+            preserve_madhab=preserve_madhab,
         )
         if not saved:
             return False, tz_name, profile, None
@@ -91,6 +101,54 @@ def save_location_and_recalculate(
         return True, tz_name, profile, today_times
     finally:
         conn.close()
+
+
+def set_madhab_and_recalculate(
+    chat_id: str | int,
+    use_hanafi: bool,
+) -> tuple[bool, Optional[dict[str, str]], Optional[str]]:
+    """
+    Меняет мазхаб Аср и пересчитывает персональное расписание.
+
+    Returns:
+        (ok, today_times, madhab_label)
+    """
+    madhab_label = "Ханафи (тень × 2)" if use_hanafi else "Шафии (тень × 1)"
+    conn = get_connection()
+    try:
+        user = get_user_by_chat_id(conn, chat_id)
+        if not user_has_location(user):
+            return False, None, madhab_label
+
+        if not update_user_madhab(conn, chat_id, use_hanafi):
+            return False, None, madhab_label
+
+        user = get_user_by_chat_id(conn, chat_id)
+        if not recalculate_user_schedule(conn, user, months_ahead=1):
+            return False, None, madhab_label
+
+        local_today = _user_local_now(user["timezone"]).strftime("%Y-%m-%d")
+        row = get_user_prayers_by_date(conn, chat_id, local_today)
+        today_times = None
+        if row:
+            today_times = {
+                "Fajr": row["fajr"],
+                "Sunrise": row["shurooq"],
+                "Dhuhr": row["dhuhr"],
+                "Asr": row["asr"],
+                "Maghrib": row["maghrib"],
+                "Isha": row["isha"],
+            }
+        return True, today_times, madhab_label
+    finally:
+        conn.close()
+
+
+def madhab_label_for_user(user: Any) -> str:
+    """Человекочитаемая подпись текущего мазхаба пользователя."""
+    if user is None:
+        return "не задан"
+    return "Ханафи (тень × 2)" if bool(user["use_hanafi"]) else "Шафии (тень × 1)"
 
 
 def recalculate_user_schedule(

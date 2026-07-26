@@ -162,47 +162,99 @@ def update_user_location(
     username: Optional[str] = None,
     first_name: Optional[str] = None,
     last_name: Optional[str] = None,
+    preserve_madhab: bool = False,
 ) -> bool:
     """Сохраняет геоданные и параметры расчёта пользователя."""
     try:
         chat_id_str = str(chat_id)
-        conn.execute("""
-            INSERT INTO users (
-                chat_id, username, first_name, last_name, subscribed,
-                latitude, longitude, timezone, calculation_method,
-                use_hanafi, fajr_angle, isha_angle
-            )
-            VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(chat_id) DO UPDATE SET
-                username=COALESCE(excluded.username, users.username),
-                first_name=COALESCE(excluded.first_name, users.first_name),
-                last_name=COALESCE(excluded.last_name, users.last_name),
-                subscribed=1,
-                latitude=excluded.latitude,
-                longitude=excluded.longitude,
-                timezone=excluded.timezone,
-                calculation_method=excluded.calculation_method,
-                use_hanafi=excluded.use_hanafi,
-                fajr_angle=excluded.fajr_angle,
-                isha_angle=excluded.isha_angle,
-                updated_at=CURRENT_TIMESTAMP
-        """, (
-            chat_id_str,
-            username,
-            first_name,
-            last_name,
-            latitude,
-            longitude,
-            timezone,
-            calculation_method,
-            1 if use_hanafi else 0,
-            fajr_angle,
-            isha_angle,
-        ))
+        if preserve_madhab:
+            conn.execute("""
+                INSERT INTO users (
+                    chat_id, username, first_name, last_name, subscribed,
+                    latitude, longitude, timezone, calculation_method,
+                    use_hanafi, fajr_angle, isha_angle
+                )
+                VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(chat_id) DO UPDATE SET
+                    username=COALESCE(excluded.username, users.username),
+                    first_name=COALESCE(excluded.first_name, users.first_name),
+                    last_name=COALESCE(excluded.last_name, users.last_name),
+                    subscribed=1,
+                    latitude=excluded.latitude,
+                    longitude=excluded.longitude,
+                    timezone=excluded.timezone,
+                    calculation_method=excluded.calculation_method,
+                    fajr_angle=excluded.fajr_angle,
+                    isha_angle=excluded.isha_angle,
+                    updated_at=CURRENT_TIMESTAMP
+            """, (
+                chat_id_str,
+                username,
+                first_name,
+                last_name,
+                latitude,
+                longitude,
+                timezone,
+                calculation_method,
+                1 if use_hanafi else 0,
+                fajr_angle,
+                isha_angle,
+            ))
+        else:
+            conn.execute("""
+                INSERT INTO users (
+                    chat_id, username, first_name, last_name, subscribed,
+                    latitude, longitude, timezone, calculation_method,
+                    use_hanafi, fajr_angle, isha_angle
+                )
+                VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(chat_id) DO UPDATE SET
+                    username=COALESCE(excluded.username, users.username),
+                    first_name=COALESCE(excluded.first_name, users.first_name),
+                    last_name=COALESCE(excluded.last_name, users.last_name),
+                    subscribed=1,
+                    latitude=excluded.latitude,
+                    longitude=excluded.longitude,
+                    timezone=excluded.timezone,
+                    calculation_method=excluded.calculation_method,
+                    use_hanafi=excluded.use_hanafi,
+                    fajr_angle=excluded.fajr_angle,
+                    isha_angle=excluded.isha_angle,
+                    updated_at=CURRENT_TIMESTAMP
+            """, (
+                chat_id_str,
+                username,
+                first_name,
+                last_name,
+                latitude,
+                longitude,
+                timezone,
+                calculation_method,
+                1 if use_hanafi else 0,
+                fajr_angle,
+                isha_angle,
+            ))
         conn.commit()
         return True
     except Exception as e:
         logger.error("❌ Ошибка при сохранении геоданных пользователя %s: %s", chat_id, e)
+        return False
+
+
+def update_user_madhab(conn, chat_id: str | int, use_hanafi: bool) -> bool:
+    """Обновляет мазхаб Аср и помечает выбор как ручной."""
+    try:
+        cursor = conn.execute("""
+            UPDATE users
+            SET use_hanafi=?,
+                madhab_manual=1,
+                updated_at=CURRENT_TIMESTAMP
+            WHERE chat_id=?
+        """, (1 if use_hanafi else 0, str(chat_id)))
+        conn.commit()
+        return cursor.rowcount > 0
+    except Exception as e:
+        logger.error("❌ Ошибка при обновлении мазхаба пользователя %s: %s", chat_id, e)
         return False
 
 
